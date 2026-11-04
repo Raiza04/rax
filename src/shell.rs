@@ -1,63 +1,102 @@
-use crate::Vault;
 use rustyline::DefaultEditor;
 use std::io::Result;
 
-pub struct Shell;
+use crate::vault::Vault;
+use clap::{Parser, Subcommand};
 
-impl Shell {
-    pub fn run_shell(vault: &mut Vault) -> Result<()> {
-        print!("\x1b[1A\x1b[2K\r\x1b[32mWelcome to the rax shell. Type 'exit' to quit.\x1b[0m\n");
-        let mut rl = DefaultEditor::new().map_err(std::io::Error::other)?;
+#[derive(Parser)]
+#[command(name = "", disable_version_flag = true)]
+struct ReplCli {
+    #[command(subcommand)]
+    command: Option<ReplCommands>,
+}
 
-        loop {
-            let readline = rl.readline("rax> ");
-            match readline {
-                Ok(line) => {
-                    let input = line.trim();
-                    if input.is_empty() {
-                        continue;
-                    }
+#[derive(Subcommand)]
+enum ReplCommands {
+    /// Lists all files in the vault
+    Ls,
 
-                    // String spliting on all whitespace
-                    let mut parts = input.split_whitespace();
+    /// Imports a file from the host OS
+    Put {
+        #[arg(short, long)]
+        path: String,
 
-                    // first word is the command
-                    let command = parts.next().unwrap_or("");
+        #[arg(short, long)]
+        remove: bool,
+    },
 
-                    // all the strings following are args of the command
-                    let args: Vec<&str> = parts.collect();
+    /// Extracts a file from the vault
+    Get {
+        #[arg(short, long)]
+        file: String,
 
-                    match command {
-                        "exit" => {
-                            println!("Locking vault...");
-                            vault.sync()?;
-                            break;
-                        }
-                        "ls" => {
-                            if args.contains(&"-h") || args.contains(&"--help") {
-                                println!("Usage: ls (Lists all files in the vault)");
-                            } else {
-                                println!("(ls is not implemented yet. Files will appear here)");
-                            }
-                        }
-                        "import" => {
-                            if args.is_empty() {
-                                println!("Error: Missing file path. Usage: import <path>");
-                            } else {
-                                println!("(Will import file: {})", args[0]);
-                            }
-                        }
-                        _ => {
-                            println!("Command not found: {}", command);
-                        }
-                    }
+        #[arg(short, long)]
+        dest: String,
+    },
+
+    /// Removes a file permanently from the vault
+    Rm {
+        #[arg(short, long)]
+        file: String,
+    },
+}
+
+pub fn run_shell(vault: &mut Vault) -> Result<()> {
+    print!("\x1b[1A\x1b[2K\r\x1b[32mWelcome to the rax shell. Type 'exit' to quit.\x1b[0m\n");
+    let mut rl = DefaultEditor::new().map_err(std::io::Error::other)?;
+
+    loop {
+        let readline = rl.readline("rax> ");
+        match readline {
+            Ok(line) => {
+                let input = line.trim();
+                if input.is_empty() {
+                    continue;
                 }
-                Err(_) => {
+
+                if input == "exit" {
                     println!("Locking vault...");
+                    vault.sync().unwrap();
                     break;
                 }
+
+                let mut clap_args = vec![""];
+                clap_args.extend(input.split_whitespace());
+
+                match ReplCli::try_parse_from(clap_args) {
+                    Ok(cli) => match cli.command {
+                        Some(ReplCommands::Ls) => {
+                            crate::builtin::ls(vault);
+                        }
+                        Some(ReplCommands::Put { path, remove }) => {
+                            if let Err(e) = vault.put_file(&path, &remove) {
+                                println!("Error importing file: {}", e);
+                            }
+                        }
+                        Some(ReplCommands::Get { file, dest }) => {
+                            //if let Err(e) = vault.get_file(&file, &dest) {
+                            //    println!("Error extracting file: {}", e);
+                            //}
+                        }
+                        Some(ReplCommands::Rm { file }) => {
+                            crate::builtin::rm(vault, &file)?;
+                            println!("(rm not implemented yet)");
+                        }
+                        None => {
+                            println!("Command not found");
+                        }
+                    },
+                    Err(e) => {
+                        println!("{}", e);
+                    }
+                }
+            }
+            Err(_) => {
+                println!("Locking vault...");
+                vault.sync().unwrap();
+                break;
             }
         }
-        Ok(())
     }
+    Ok(())
 }

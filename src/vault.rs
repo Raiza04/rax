@@ -57,7 +57,7 @@ impl Vault {
     }
 
     pub fn open(path: &PathBuf, pass_auth: &str) -> Result<Vault> {
-        let mut f = File::open(path)?;
+        let mut f = fs::OpenOptions::new().read(true).write(true).open(path)?;
 
         // 1. Verify Magic Bytes
         let mut magic_bytes = [0u8; 4];
@@ -135,7 +135,7 @@ impl Vault {
     }
 
     /// Imports a plaintext file from the OS, encrypts it into blocks, and saves it in the vault.
-    pub fn put_file(&mut self, source_path: &str) -> Result<()> {
+    pub fn put_file(&mut self, source_path: &str, remove_sorce: &bool) -> Result<()> {
         let mut source_file = fs::File::open(source_path)?;
 
         let metadata = source_file.metadata()?;
@@ -184,6 +184,10 @@ impl Vault {
         };
 
         self.table.files.push(new_inode);
+
+        if *remove_sorce {
+            std::fs::remove_file(source_path)?;
+        }
 
         println!("File Successfully encrypted and stored");
 

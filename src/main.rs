@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
 use std::io::Result;
 
+mod builtin;
 mod crypto;
 mod fs;
 mod shell;
@@ -23,6 +24,16 @@ enum Commands {
         /// Size of the vault in megabytes
         #[arg(short, long)]
         size: usize,
+    },
+
+    ///Puts a file in vault
+    Put {
+        /// Path to the file to import
+        #[arg(short, long)]
+        path: String,
+
+        #[arg(short, long)]
+        remove: bool,
     },
 }
 
@@ -55,13 +66,23 @@ fn run_app() -> Result<()> {
             Vault::create(&vault_path, *size, &admin_pass)?;
         }
 
+        Some(Commands::Put { path, remove }) => {
+            let pass_auth = prompt_password("Enter the admin password: ")?;
+
+            let vault_path = get_vault_path()?;
+            let mut vault = Vault::open(&vault_path, &pass_auth)?;
+
+            vault.put_file(path, remove)?;
+            vault.sync()?;
+        }
+
         None => {
             let pass_auth = prompt_password("Enter the admin password: ")?;
 
             let vault_path = get_vault_path()?;
             let mut opened_vault = Vault::open(&vault_path, &pass_auth)?;
 
-            shell::Shell::run_shell(&mut opened_vault)?;
+            shell::run_shell(&mut opened_vault)?;
         }
     }
 
