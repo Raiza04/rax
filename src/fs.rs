@@ -169,3 +169,61 @@ impl InodeTable {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies the correct initialization of the InodeTable, including reserved blocks.
+    #[test]
+    fn test_inode_table_initialization() {
+        let table = InodeTable::new(2);
+
+        // 2 MB = 512 blocks
+        assert_eq!(table.free_blocks.len(), 512);
+
+        // First MB (256 blocks) should be strictly reserved (true)
+        assert!(table.free_blocks[0]);
+        assert!(table.free_blocks[255]);
+
+        // Block 256 onwards should be free (false)
+        assert!(!table.free_blocks[256]);
+    }
+
+    /// Tests contiguous allocation and subsequent deallocation of blocks.
+    #[test]
+    fn test_allocation_and_deallocation() {
+        let mut table = InodeTable::new(2);
+
+        let allocated = table.allocate(3).expect("Failed to allocate blocks");
+        assert_eq!(allocated.len(), 3);
+        assert!(table.free_blocks[allocated[0]]);
+
+        table.deallocate(&allocated);
+        assert!(!table.free_blocks[allocated[0]]);
+    }
+
+    /// ensure that the nothing is returned if there is no space left
+    #[test]
+    fn test_allocation_out_of_space() {
+        let mut table = InodeTable::new(2);
+
+        // 2 MB total = 512 blocks. 256 are reserved, leaving 256 free.
+        // We request 257 blocks, which should gracefully fail.
+        let allocated = table.allocate(257);
+        assert!(allocated.is_none());
+    }
+
+    /// Ensures that the table can be serialized and perfectly restored.
+    #[test]
+    fn test_serialization_roundtrip() {
+        let mut original = InodeTable::new(2);
+        original.allocate(10).unwrap();
+
+        let bytes = original.to_bytes().expect("Serialization failed");
+        let restored = InodeTable::from_bytes(&bytes).expect("Deserialization failed");
+
+        assert_eq!(original.free_blocks, restored.free_blocks);
+        assert_eq!(original.block_size, restored.block_size);
+    }
+}

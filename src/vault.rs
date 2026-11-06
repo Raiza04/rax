@@ -376,3 +376,85 @@ pub fn get_vault_path() -> Result<PathBuf> {
 
     Ok(data_dir.join("vault.rax"))
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{self, OpenOptions};
+    use std::io::Write;
+    use tempfile::tempdir;
+
+    /// Tests the lifecycle of creating a vault and subsequently opening it.
+    #[test]
+    fn test_vault_lifecycle() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+
+        let vault = Vault::create(&vault_path, 2, "admin123").unwrap();
+        assert!(vault.table.free_blocks[0]);
+
+        let opened_vault = Vault::open(&vault_path, "admin123").unwrap();
+        assert_eq!(opened_vault.table.block_size, 4096);
+    }
+
+    /// Tests if the vaults opens with the wrong password
+    #[test]
+    fn test_open_wrong_password() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+
+        Vault::create(&vault_path, 2, "admin123").unwrap();
+
+        let result = Vault::open(&vault_path, "wrong_password");
+        assert!(result.is_err());
+    }
+
+    /// Tests if the program handles corrupted files correctly
+    #[test]
+    fn test_corrupted_magic_bytes() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+
+        Vault::create(&vault_path, 2, "admin123").unwrap();
+
+        // Maliciously overwrite the Magic Bytes without triggering the crypto engine
+        let mut file = OpenOptions::new().write(true).open(&vault_path).unwrap();
+        file.write_all(b"HACK").unwrap();
+        file.sync_all().unwrap();
+
+        let result = Vault::open(&vault_path, "admin123");
+        assert!(result.is_err());
+    }
+
+    /// End-to-end integration test: importing a file, checking RAM, and extracting it.
+    #[test]
+    fn test_file_import_and_extraction() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+
+        Vault::create(&vault_path, 2, "admin123").unwrap();
+        let mut vault = Vault::open(&vault_path, "admin123").unwrap();
+
+        let source_path = dir.path().join("secret.txt");
+        fs::write(&source_path, b"Top Secret File Content").unwrap();
+
+        let remove = false;
+        vault
+            .put_file(source_path.to_str().unwrap(), &remove)
+            .unwrap();
+
+        assert_eq!(vault.table.files.len(), 1);
+        assert_eq!(vault.table.files[0].name, "secret.txt");
+
+        let ram_bytes = vault.read_file_to_memory("secret.txt").unwrap();
+        assert_eq!(ram_bytes[0..23], b"Top Secret File Content"[..]);
+
+        let dest_path = dir.path().join("extracted.txt");
+        vault
+            .get_file("secret.txt", dest_path.to_str().unwrap())
+            .unwrap();
+
+        let extracted = fs::read(&dest_path).unwrap();
+        assert_eq!(extracted[0..23], b"Top Secret File Content"[..]);
+    }
+}

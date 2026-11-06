@@ -143,7 +143,7 @@ pub fn run_shell(vault: &mut Vault) -> Result<()> {
                             }
                         }
                         Some(ReplCommands::Clear) => {
-                            print!("\x1B[2J\x1B[1;1H");
+                            let _ = rl.clear_screen();
                         }
                         None => {
                             println!("Command not found");

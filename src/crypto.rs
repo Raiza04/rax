@@ -191,3 +191,73 @@ pub fn read_encrypted_chunk(file: &mut File, cipher: &Aes256Gcm) -> Result<Vec<u
 
     Ok(decrypted)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::{Seek, SeekFrom};
+    use tempfile::tempfile;
+
+    /// Validates that a payload encrypts into a 4096-byte block and decrypts flawlessly.
+    #[test]
+    fn test_block_encryption_roundtrip() {
+        let salt = [0u8; 32];
+        let cipher = setup_cipher("test_password", &salt).unwrap();
+
+        let mut payload = [0u8; 4068];
+        payload[0..14].copy_from_slice(b"Secret Payload");
+
+        let encrypted_block = encrypt_block_payload(&cipher, &payload).unwrap();
+        assert_eq!(encrypted_block.len(), 4096);
+
+        let decrypted_payload = decrypt_block_payload(&cipher, &encrypted_block).unwrap();
+        assert_eq!(payload, decrypted_payload);
+    }
+
+    /// Tests if wrong passwords are handled correctly
+    #[test]
+    fn test_decryption_wrong_password() {
+        let salt = [0u8; 32];
+        let cipher_encrypt = setup_cipher("correct_password", &salt).unwrap();
+        let cipher_decrypt = setup_cipher("hacker_password", &salt).unwrap();
+
+        let payload = [42u8; 4068];
+        let encrypted_block = encrypt_block_payload(&cipher_encrypt, &payload).unwrap();
+
+        // Attempt to decrypt with the wrong cipher engine
+        let result = decrypt_block_payload(&cipher_decrypt, &encrypted_block);
+        assert!(result.is_err());
+    }
+
+    /// Validates variable-length chunk encryption using temporary files.
+    #[test]
+    fn test_chunk_encryption_roundtrip() {
+        let salt = [0u8; 32];
+        let cipher = setup_cipher("test_password", &salt).unwrap();
+        let data = b"Vault Header Metadata";
+
+        let mut file = tempfile().expect("Failed to create temp file");
+
+        write_encrypted_chunk(&mut file, &cipher, data).unwrap();
+        file.seek(SeekFrom::Start(0)).unwrap();
+
+        let decrypted = read_encrypted_chunk(&mut file, &cipher).unwrap();
+        assert_eq!(data.as_ref(), decrypted);
+    }
+
+    /// Ensures that modifying a ciphertext block triggers an Access Denied error (MAC mismatch).
+    #[test]
+    fn test_tamper_proofing() {
+        let salt = [0u8; 32];
+        let cipher = setup_cipher("test_password", &salt).unwrap();
+        let payload = [42u8; 4068];
+
+        let mut encrypted_block = encrypt_block_payload(&cipher, &payload).unwrap();
+
+        // Simulate bit-rot or malicious tampering
+        encrypted_block[100] ^= 1;
+
+        let result = decrypt_block_payload(&cipher, &encrypted_block);
+        assert!(result.is_err());
+    }
+}
