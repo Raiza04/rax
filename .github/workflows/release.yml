@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-release:
+    name: Build & Publish Linux Release
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run test suite before release
+        run: cargo test --release
+
+      - name: Build optimized release binary
+        run: cargo build --release --locked
+
+      - name: Package binary and generate SHA-256 checksum
+        run: |
+          ARCHIVE_NAME="rax-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz"
+          tar -czvf "$ARCHIVE_NAME" -C target/release rax README.md
+          sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            rax-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz
+            rax-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz.sha256
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') || contains(github.ref_name, 'rc') }}

@@ -9,6 +9,7 @@ use std::fs::{self, File};
 use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
 use std::path::PathBuf;
 use std::time::UNIX_EPOCH;
+use zeroize::Zeroize;
 
 /// Represents an open, authenticated session with the encrypted vault.
 ///
@@ -49,7 +50,12 @@ impl Vault {
     /// let vault = Vault::create(&vault_path, 50, "super_secret_password").unwrap();
     /// ```
     pub fn create(path: &PathBuf, size_mb: usize, admin_pass: &str) -> Result<Vault> {
-        let mut file = fs::File::create(path)?;
+        let mut file = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)?;
 
         // 1. Fill the entire vault with cryptographic noise to hide actual data boundaries
         let mut rng = rand::rng();
@@ -216,6 +222,20 @@ impl Vault {
     /// vault.sync().unwrap();
     /// ```
     pub fn put_file(&mut self, source_path: &str, remove_sorce: &bool) -> Result<()> {
+        let path = std::path::Path::new(source_path);
+        let filename = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown_file")
+            .to_string();
+
+        if self.table.files.iter().any(|f| f.name == filename) {
+            return Err(Error::new(
+                ErrorKind::AlreadyExists,
+                format!("File '{}' already exists in vault", filename),
+            ));
+        }
+
         let mut source_file = fs::File::open(source_path)?;
 
         let metadata = source_file.metadata()?;
@@ -242,6 +262,7 @@ impl Vault {
             let payload = crate::crypto::encrypt_block_payload(&self.cipher, &buffer)?;
             self.write_block(*block_index, &payload)?;
         }
+        buffer.zeroize();
 
         let path = std::path::Path::new(source_path);
         let filename = path
@@ -301,12 +322,13 @@ impl Vault {
 
         for &block_index in &inode.blocks {
             let encrypted_block = self.read_block(block_index)?;
-            let payload = crate::crypto::decrypt_block_payload(&self.cipher, &encrypted_block)?;
+            let mut payload = crate::crypto::decrypt_block_payload(&self.cipher, &encrypted_block)?;
 
             // Prevent trailing zero-padding from being written to the extracted file
             let write_len = std::cmp::min(bytes_left, 4068);
             out_file.write_all(&payload[..write_len])?;
 
+            payload.zeroize();
             bytes_left -= write_len;
         }
 
@@ -335,12 +357,13 @@ impl Vault {
 
         for &block_index in &inode.blocks {
             let encrypted_block = self.read_block(block_index)?;
-            let payload = crate::crypto::decrypt_block_payload(&self.cipher, &encrypted_block)?;
+            let mut payload = crate::crypto::decrypt_block_payload(&self.cipher, &encrypted_block)?;
 
             let write_len = std::cmp::min(bytes_left, 4068);
             // Append the extracted slice directly to our RAM buffer
             memory_buffer.extend_from_slice(&payload[..write_len]);
 
+            payload.zeroize();
             bytes_left -= write_len;
         }
 

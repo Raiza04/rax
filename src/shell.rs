@@ -112,27 +112,28 @@ pub fn run_shell(vault: &mut Vault) -> Result<()> {
                             crate::builtin::ls(vault);
                         }
                         Some(ReplCommands::Put { path, remove }) => {
-                            if let Err(e) = vault.put_file(&path, &remove) {
-                                println!("Error importing file: {}", e);
+                            match vault.put_file(&path, &remove).and_then(|_| vault.sync()) {
+                                Ok(_) => {
+                                    println!("File successfully encrypted and stored in vault.")
+                                }
+                                Err(e) => println!("Error importing file: {}", e),
                             }
-                            println!("File successfuly encrypted and stored in vault");
                         }
                         Some(ReplCommands::Get { file, dest }) => {
-                            // Safely extract the file, printing errors instead of crashing
-                            if let Err(e) = vault.get_file(&file, &dest) {
-                                println!("Error extracting file: {}", e);
+                            match vault.get_file(&file, &dest) {
+                                Ok(_) => println!("'{}' successfully extracted.", file),
+                                Err(e) => println!("Error extracting file: {}", e),
                             }
-                            println!("{} successfuly extracted", file);
                         }
                         Some(ReplCommands::Rm { file }) => {
-                            // Safely remove the file, printing errors instead of crashing
-                            if let Err(e) = crate::builtin::rm(vault, &file) {
-                                println!("Error removing file: {}", e);
+                            match crate::builtin::rm(vault, &file).and_then(|_| vault.sync()) {
+                                Ok(_) => {
+                                    println!("File '{}' permanently removed from vault.", file)
+                                }
+                                Err(e) => println!("Error removing file: {}", e),
                             }
-                            println!("File '{}' permanently removed from vault.", file);
                         }
                         Some(ReplCommands::Cat { file }) => {
-                            // Safely read and print the file to the terminal
                             if let Err(e) = crate::builtin::cat(vault, &file) {
                                 println!("Error reading file: {}", e);
                             }

@@ -10,7 +10,7 @@
 //! 2. **Dynamic Chunks (`write_encrypted_chunk`):** Variable-sized packets for system metadata (like the `InodeTable`).
 
 use aes_gcm::{
-    Aes256Gcm, Key as AesKey, Nonce as AesNonce,
+    Aes256Gcm, Nonce as AesNonce,
     aead::{Aead, KeyInit},
 };
 use argon2::Argon2;
@@ -18,6 +18,7 @@ use argon2::Argon2;
 use rand::RngExt;
 use std::fs::File;
 use std::io::{Error, ErrorKind, Read, Result, Write};
+use zeroize::Zeroize;
 
 /// Derives a 256-bit AES master key from a plaintext password and initializes the cipher.
 ///
@@ -46,14 +47,18 @@ pub fn setup_cipher(password: &str, salt: &[u8; 32]) -> Result<Aes256Gcm> {
         .hash_password_into(password.as_bytes(), salt, &mut key_bytes)
         .is_err()
     {
+        key_bytes.zeroize();
         return Err(Error::new(
             ErrorKind::InvalidInput,
             "Failed to hash password",
         ));
     }
 
-    let key = AesKey::<Aes256Gcm>::from(key_bytes);
-    Ok(Aes256Gcm::new(&key))
+    let cipher = Aes256Gcm::new_from_slice(&key_bytes)
+        .map_err(|_| Error::new(ErrorKind::InvalidInput, "Invalid key length"))?;
+
+    key_bytes.zeroize();
+    Ok(cipher)
 }
 
 /// Encrypts a fixed 4068-byte file payload into a full 4096-byte physical storage block.
@@ -108,7 +113,7 @@ pub fn decrypt_block_payload(cipher: &Aes256Gcm, block: &[u8; 4096]) -> Result<[
     let mut data = [0u8; 4084];
     data.copy_from_slice(&block[12..4096]);
 
-    let payloadtext = cipher.decrypt(&aes_nonce, data.as_ref()).map_err(|_| {
+    let mut payloadtext = cipher.decrypt(&aes_nonce, data.as_ref()).map_err(|_| {
         Error::new(
             ErrorKind::PermissionDenied,
             "Access Denied: Wrong Password or corrupted data!",
@@ -118,6 +123,8 @@ pub fn decrypt_block_payload(cipher: &Aes256Gcm, block: &[u8; 4096]) -> Result<[
     // 4084 total ciphertext bytes - 16 bytes (MAC Tag) = 4068 bytes of actual payload
     let mut result = [0u8; 4068];
     result.copy_from_slice(&payloadtext);
+
+    payloadtext.zeroize();
 
     Ok(result)
 }

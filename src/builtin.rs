@@ -11,6 +11,7 @@ use std::io::Write;
 use std::io::{Error, ErrorKind, Result};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
+use zeroize::Zeroize;
 
 /// Lists all files currently stored in the vault, formatted as an ASCII table.
 ///
@@ -76,23 +77,23 @@ pub fn rm(vault: &mut Vault, filename: &str) -> Result<()> {
 /// Returns an error if the file is not found, cannot be decrypted, or contains
 /// invalid UTF-8 (binary data).
 pub fn cat(vault: &mut Vault, filename: &str) -> Result<()> {
-    // 1. Fetch the decrypted raw bytes entirely into RAM
-    let raw_bytes = vault.read_file_to_memory(filename)?;
+    let mut raw_bytes = vault.read_file_to_memory(filename)?;
 
-    // 2. Strict UTF-8 validation: Refuse to print if it's a binary file
-    let text = std::str::from_utf8(&raw_bytes).map_err(|_| {
-        Error::new(
-            ErrorKind::InvalidData,
-            "File contains binary data (not valid UTF-8) and cannot be printed safely.",
-        )
-    })?;
-
-    // 3. Print the validated text to the terminal
-    println!("{}", text);
-
-    Ok(())
+    match std::str::from_utf8(&raw_bytes) {
+        Ok(text) => {
+            println!("{}", text);
+            raw_bytes.zeroize();
+            Ok(())
+        }
+        Err(_) => {
+            raw_bytes.zeroize();
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                "File contains binary data (not valid UTF-8) and cannot be printed safely.",
+            ))
+        }
+    }
 }
-
 /// Extracts a text file to a RAM disk, opens it in the user's preferred terminal editor,
 /// and securely re-imports it into the vault upon completion.
 ///
@@ -107,15 +108,15 @@ pub fn cat(vault: &mut Vault, filename: &str) -> Result<()> {
 /// Returns an error if the file cannot be extracted, if the RAM disk is unavailable,
 /// or if the external editor process fails to spawn.
 pub fn edit(vault: &mut Vault, filename: &str) -> Result<()> {
-    let raw_bytes = vault.read_file_to_memory(filename)?;
+    let mut raw_bytes = vault.read_file_to_memory(filename)?;
 
-    // Prevent rendering binary gibberish in the terminal editor
-    std::str::from_utf8(&raw_bytes).map_err(|_| {
-        Error::new(
+    if std::str::from_utf8(&raw_bytes).is_err() {
+        raw_bytes.zeroize();
+        return Err(Error::new(
             ErrorKind::InvalidData,
             "File contains binary data. Editing is only supported for text files.",
-        )
-    })?;
+        ));
+    }
 
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -123,44 +124,50 @@ pub fn edit(vault: &mut Vault, filename: &str) -> Result<()> {
         .as_micros();
     let tmp_path = format!("/dev/shm/.rax_tmp_{}_{}", filename, timestamp);
 
-    std::fs::write(&tmp_path, &raw_bytes)?;
+    let write_res = std::fs::write(&tmp_path, &raw_bytes);
+    raw_bytes.zeroize();
+    write_res?;
 
     let editor = env::var("VISUAL")
         .or_else(|_| env::var("EDITOR"))
         .unwrap_or_else(|_| "nano".to_string());
 
-    let mut child = Command::new(&editor).arg(&tmp_path).spawn().map_err(|e| {
-        Error::new(
-            ErrorKind::NotFound,
-            format!("Failed to start editor '{}': {}", editor, e),
-        )
-    })?;
+    // Run editor and capture result without early-returning before cleanup
+    let edit_result = (|| -> Result<()> {
+        let mut child = Command::new(&editor).arg(&tmp_path).spawn().map_err(|e| {
+            Error::new(
+                ErrorKind::NotFound,
+                format!("Failed to start editor '{}': {}", editor, e),
+            )
+        })?;
 
-    // Blocks the REPL until the external editor process terminates
-    let status = child.wait()?;
+        let status = child.wait()?;
 
-    if status.success() {
-        crate::builtin::rm(vault, filename)?;
-        vault.put_file(&tmp_path, &false)?;
+        if status.success() {
+            crate::builtin::rm(vault, filename)?;
+            vault.put_file(&tmp_path, &false)?;
 
-        if let Some(inode) = vault.table.files.last_mut() {
-            inode.name = filename.to_string();
+            if let Some(inode) = vault.table.files.last_mut() {
+                inode.name = filename.to_string();
+            }
+
+            vault.sync()?;
+            println!("File '{}' successfully updated.", filename);
+        } else {
+            println!("Editor closed with an error. No changes were saved.");
         }
+        Ok(())
+    })();
 
-        println!("File '{}' successfully updated.", filename);
-    } else {
-        println!("Editor closed with an error. No changes were saved.");
-    }
-
-    // Secure cleanup: manually zero-out the volatile RAM disk file before dropping it
-    if let Ok(mut file) = OpenOptions::new().write(true).open(&tmp_path) {
-        let size = std::fs::metadata(&tmp_path)?.len() as usize;
-        let zeros = vec![0u8; size];
+    if let Ok(mut file) = OpenOptions::new().write(true).open(&tmp_path)
+        && let Ok(meta) = file.metadata()
+    {
+        let zeros = vec![0u8; meta.len() as usize];
         let _ = file.write_all(&zeros);
         let _ = file.sync_all();
     }
 
     let _ = std::fs::remove_file(&tmp_path);
 
-    Ok(())
+    edit_result
 }

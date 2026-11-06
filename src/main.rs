@@ -7,6 +7,7 @@
 use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
 use std::io::Result;
+use zeroize::Zeroize;
 
 mod builtin;
 mod crypto;
@@ -57,17 +58,19 @@ enum Commands {
 /// Exits the process immediately if the passwords do not match.
 /// Returns an `std::io::Error` if the terminal prompt fails.
 fn setup_admin() -> Result<String> {
-    let pass1 = prompt_password("Enter a new password: ")?;
-    let pass2 = prompt_password("Repeat the password: ")?;
+    let mut pass1 = prompt_password("Enter a new password: ")?;
+    let mut pass2 = prompt_password("Repeat the password: ")?;
 
     if pass1 != pass2 {
-        println!("Passwords didn`t match. Make sure they are the same. ");
+        pass1.zeroize();
+        pass2.zeroize();
+        println!("Passwords didn't match. Make sure they are the same.");
         std::process::exit(1);
     }
 
+    pass2.zeroize();
     Ok(pass1)
 }
-
 /// Core application logic and routing for host-level commands.
 ///
 /// Parses CLI arguments, prompts for passwords as needed, and either executes
@@ -81,8 +84,7 @@ fn run_app() -> Result<()> {
 
     match &cli.command {
         Some(Commands::Create { size }) => {
-            let admin_pass = setup_admin()?;
-
+            let mut admin_pass = setup_admin()?;
             let vault_path = get_vault_path()?;
             println!(
                 "Creating vault at '{}' with a size of {} MB...",
@@ -90,26 +92,30 @@ fn run_app() -> Result<()> {
                 size
             );
 
-            Vault::create(&vault_path, *size, &admin_pass)?;
+            let res = Vault::create(&vault_path, *size, &admin_pass);
+            admin_pass.zeroize();
+            res?;
         }
 
         Some(Commands::Put { path, remove }) => {
-            let pass_auth = prompt_password("Enter the admin password: ")?;
-
+            let mut pass_auth = prompt_password("Enter the admin password: ")?;
             let vault_path = get_vault_path()?;
-            let mut vault = Vault::open(&vault_path, &pass_auth)?;
+            let vault = Vault::open(&vault_path, &pass_auth);
+            pass_auth.zeroize();
+            let mut vault = vault?;
 
             vault.put_file(path, remove)?;
             vault.sync()?;
 
-            println!("File successfuly encrypted and stored in vault");
+            println!("File successfully encrypted and stored in vault.");
         }
 
         None => {
-            let pass_auth = prompt_password("Enter the admin password: ")?;
-
+            let mut pass_auth = prompt_password("Enter the admin password: ")?;
             let vault_path = get_vault_path()?;
-            let mut opened_vault = Vault::open(&vault_path, &pass_auth)?;
+            let opened_vault = Vault::open(&vault_path, &pass_auth);
+            pass_auth.zeroize();
+            let mut opened_vault = opened_vault?;
 
             shell::run_shell(&mut opened_vault)?;
         }
@@ -117,7 +123,6 @@ fn run_app() -> Result<()> {
 
     Ok(())
 }
-
 /// The main entry point.
 ///
 /// Wraps `run_app()` to provide a clean exit with an error code and a formatted
