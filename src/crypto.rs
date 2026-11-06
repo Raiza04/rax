@@ -1,3 +1,14 @@
+//! Cryptographic engine for the `rax` Virtual File System.
+//!
+//! This module handles all encryption, decryption, and key derivation processes.
+//! It uses **Argon2** to securely hash user passwords and derive strong master keys,
+//! and **AES-256-GCM** (Galois/Counter Mode) to ensure both data confidentiality
+//! and authenticity (tamper-proofing).
+//!
+//! It exposes two distinct data formats:
+//! 1. **Fixed Blocks (`encrypt_block_payload`):** For raw file data mapped to the 4096-byte grid.
+//! 2. **Dynamic Chunks (`write_encrypted_chunk`):** Variable-sized packets for system metadata (like the `InodeTable`).
+
 use aes_gcm::{
     Aes256Gcm, Key as AesKey, Nonce as AesNonce,
     aead::{Aead, KeyInit},
@@ -8,6 +19,25 @@ use rand::RngExt;
 use std::fs::File;
 use std::io::{Error, ErrorKind, Read, Result, Write};
 
+/// Derives a 256-bit AES master key from a plaintext password and initializes the cipher.
+///
+/// This function uses the memory-hard `Argon2` algorithm to protect against
+/// brute-force and dictionary attacks.
+///
+/// # Arguments
+/// * `password` - The plaintext password provided by the user.
+/// * `salt` - A 32-byte cryptographic salt read from the vault header.
+///
+/// # Errors
+/// Returns an `std::io::Error` of kind `InvalidInput` if the Argon2 hashing process fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// // Assuming a 32-byte salt read from the vault
+/// let salt = [0u8; 32];
+/// let cipher = setup_cipher("my_admin_password", &salt).unwrap();
+/// ```
 pub fn setup_cipher(password: &str, salt: &[u8; 32]) -> Result<Aes256Gcm> {
     let mut key_bytes = [0u8; 32];
     let argon2 = Argon2::default();
@@ -26,8 +56,22 @@ pub fn setup_cipher(password: &str, salt: &[u8; 32]) -> Result<Aes256Gcm> {
     Ok(Aes256Gcm::new(&key))
 }
 
-/// Encrypts exactly 4068 bytes of payload into a full 4096-byte physical block.
-/// The resulting block structure: [Nonce (12)] + [Ciphertext + MAC Tag (4084)]
+/// Encrypts a fixed 4068-byte file payload into a full 4096-byte physical storage block.
+///
+/// The resulting 4096-byte block structure is:
+/// * `[0..12]` - Randomly generated Nonce.
+/// * `[12..4096]` - Ciphertext + 16-byte MAC Tag attached by AES-GCM.
+///
+/// # Security
+/// A unique 12-byte Nonce is generated via a secure RNG for every single block
+/// to ensure that identical payloads yield completely different ciphertexts.
+///
+/// # Arguments
+/// * `cipher` - The initialized AES-256-GCM engine.
+/// * `payload` - Exactly 4068 bytes of plaintext file data (padded with zeros if necessary).
+///
+/// # Errors
+/// Returns an error if the underlying AES encryption fails.
 pub fn encrypt_block_payload(cipher: &Aes256Gcm, payload: &[u8; 4068]) -> Result<[u8; 4096]> {
     let mut nonce = [0u8; 12];
     rand::rng().fill(&mut nonce);
@@ -45,7 +89,17 @@ pub fn encrypt_block_payload(cipher: &Aes256Gcm, payload: &[u8; 4068]) -> Result
     Ok(result)
 }
 
-/// Decrypts a full 4096-byte physical block and returns the 4068-byte original payload.
+/// Decrypts a 4096-byte physical storage block and extracts the original 4068-byte payload.
+///
+/// Validates the AES-GCM MAC Tag during decryption to detect any tampering or corruption.
+///
+/// # Arguments
+/// * `cipher` - The initialized AES-256-GCM engine.
+/// * `block` - The raw 4096-byte block read from the disk.
+///
+/// # Errors
+/// Returns an `std::io::Error` of kind `PermissionDenied` if decryption fails
+/// (e.g., wrong password, tampered data, or corrupted block).
 pub fn decrypt_block_payload(cipher: &Aes256Gcm, block: &[u8; 4096]) -> Result<[u8; 4068]> {
     let mut nonce = [0u8; 12];
     nonce.copy_from_slice(&block[0..12]);
@@ -61,14 +115,26 @@ pub fn decrypt_block_payload(cipher: &Aes256Gcm, block: &[u8; 4096]) -> Result<[
         )
     })?;
 
-    //4084 - 16 (MAC Tag) = 4068
+    // 4084 total ciphertext bytes - 16 bytes (MAC Tag) = 4068 bytes of actual payload
     let mut result = [0u8; 4068];
     result.copy_from_slice(&payloadtext);
 
     Ok(result)
 }
 
-/// Helper: Encrypts data and writes the packet (Size + Nonce + Ciphertext) to the file
+/// Encrypts variable-length metadata and writes it as a self-describing packet to the file.
+///
+/// Use this method for system headers (like the Auth Block or `InodeTable`),
+/// not for mass file data. The packet layout on disk is:
+/// `[Size (8 bytes, Little Endian)] + [Nonce (12 bytes)] + [Ciphertext + MAC Tag (Variable)]`
+///
+/// # Arguments
+/// * `file` - A mutable reference to the open vault file.
+/// * `cipher` - The initialized AES-256-GCM engine.
+/// * `data` - The plaintext metadata byte slice to encrypt.
+///
+/// # Errors
+/// Returns an error if encryption or disk write operations fail.
 pub fn write_encrypted_chunk(file: &mut File, cipher: &Aes256Gcm, data: &[u8]) -> Result<()> {
     let mut nonce_bytes = [0u8; 12];
     rand::rng().fill(&mut nonce_bytes);
@@ -87,23 +153,33 @@ pub fn write_encrypted_chunk(file: &mut File, cipher: &Aes256Gcm, data: &[u8]) -
     Ok(())
 }
 
-/// Helper: Reads a packet (Size + Nonce + Ciphertext) from the file and decrypts it
+/// Reads a self-describing encrypted metadata packet from the file and decrypts it.
+///
+/// Parses the 8-byte size header to determine how many bytes to read,
+/// extracts the nonce, and authenticates/decrypts the payload.
+///
+/// # Arguments
+/// * `file` - A mutable reference to the open vault file positioned at the start of the chunk.
+/// * `cipher` - The initialized AES-256-GCM engine.
+///
+/// # Errors
+/// Returns an error if disk reads fail or if decryption/authentication fails.
 pub fn read_encrypted_chunk(file: &mut File, cipher: &Aes256Gcm) -> Result<Vec<u8>> {
-    // 1. Read the size of the incoming ciphertext (8 Bytes)
+    // 1. Read the size of the incoming ciphertext (8 Bytes, Little Endian)
     let mut size_bytes = [0u8; 8];
     file.read_exact(&mut size_bytes)?;
     let size = u64::from_le_bytes(size_bytes) as usize;
 
-    // 2. Read the nonce specifically used for this chunk (12 Bytes)
+    // 2. Read the specific nonce used for this chunk (12 Bytes)
     let mut nonce_bytes = [0u8; 12];
     file.read_exact(&mut nonce_bytes)?;
     let aes_nonce = AesNonce::from(nonce_bytes);
 
-    // 3. Read the actual ciphertext
+    // 3. Read the actual ciphertext based on the previously extracted size
     let mut ciphertext = vec![0u8; size];
     file.read_exact(&mut ciphertext)?;
 
-    // 4. Decrypt the data
+    // 4. Authenticate and decrypt the data
     let decrypted = cipher
         .decrypt(&aes_nonce, ciphertext.as_ref())
         .map_err(|_| {
