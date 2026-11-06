@@ -4,8 +4,8 @@ Project backlog and technical milestones for the `rax` Encrypted Virtual File Sy
 
 ---
 
-## ⚡ Milestone v0.2.0 — Shell UX & Non-Breaking Enhancements
-*Focus: Improving interactive usability and container management without breaking backwards compatibility with v0.1.0 `.rax` vaults.*
+## ⚡ Milestone v1.2.0 — Shell UX & Non-Breaking Enhancements
+*Focus: Improving interactive usability and container management without breaking backwards compatibility with v1.1.0 `.rax` vaults.*
 
 ### ⌨️ 1. Tab Completion & Interactive Shell
 - [ ] **Custom Rustyline helper:**
