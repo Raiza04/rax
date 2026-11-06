@@ -35,7 +35,12 @@ jobs:
       - name: Package binary and generate SHA-256 checksum
         run: |
           ARCHIVE_NAME="rax-${{ github.ref_name }}-x86_64-unknown-linux-gnu.tar.gz"
-          tar -czvf "$ARCHIVE_NAME" -C target/release rax README.md
+          cp target/release/rax .
+          if [ -f README.md ]; then
+            tar -czvf "$ARCHIVE_NAME" rax README.md
+          else
+            tar -czvf "$ARCHIVE_NAME" rax
+          fi
           sha256sum "$ARCHIVE_NAME" > "$ARCHIVE_NAME.sha256"
 
       - name: Create GitHub Release
