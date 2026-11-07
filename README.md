@@ -150,14 +150,14 @@ Full module documentation is automatically built and hosted via **GitHub Pages**
 
 ---
 
-## ⚠️ Current Limitations (v0.1.0)
+## ⚠️ Current Limitations (v1.1.0)
 
-In the spirit of transparent security engineering, please note the architectural constraints of the current `v0.1.0` MVP release:
+In the spirit of transparent security engineering, please note the architectural constraints of the current `v1.1.0` MVP release:
 
 1. **Linux-Only In-Memory Editing (`/dev/shm`):** The `edit` command relies on `/dev/shm` (Shared Memory RAM disk) to pass decrypted files to external terminal editors (`vim`, `nano`) without touching the SSD. Consequently, `edit` is currently only supported on Linux. (A built-in cross-platform TUI editor is planned for `v2.0`).
-2. **Flat File Structure:** `v0.1.0` uses a flat `InodeTable` without hierarchical subdirectories. Importing two files with the exact same filename is rejected to prevent collisions. Hierarchical directories (`mkdir`, `cd`, `pwd`) are scheduled for `v2.0`.
-3. **Static Container Size:** The total size of `vault.rax` is fixed upon creation (`rax create --size <MB>`). Dynamic in-place container expansion (`grow`) will be introduced in `v0.2.0`.
-4. **In-Memory File Streaming:** Commands like `cat` and `edit` decrypt the target file completely into a contiguous `Vec<u8>` buffer in RAM. While ideal for credentials, notes, source code, and documents, `v0.1.0` is not intended for multi-gigabyte video files.
+2. **Flat File Structure:** `v1.1.0` uses a flat `InodeTable` without hierarchical subdirectories. Importing two files with the exact same filename is rejected to prevent collisions. Hierarchical directories (`mkdir`, `cd`, `pwd`) are scheduled for `v2.0`.
+3. **Static Container Size:** The total size of `vault.rax` is fixed upon creation (`rax create --size <MB>`). Dynamic in-place container expansion (`grow`) will be introduced in `v1.2.0`.
+4. **In-Memory File Streaming:** Commands like `cat` and `edit` decrypt the target file completely into a contiguous `Vec<u8>` buffer in RAM. While ideal for credentials, notes, source code, and documents, `v1.1.0` is not intended for multi-gigabyte video files.
 5. **No Swap Locking (`mlock`) Yet:** While `zeroize` guarantees that buffers are wiped before deallocation, the OS kernel could theoretically swap active memory pages if system RAM is exhausted. OS-level memory locking (`mlock` / `VirtualLock`) is on the `v2.0` roadmap.
 
 ---
