@@ -18,7 +18,7 @@
 [Installation](#-installation) •
 [Usage](#-usage) •
 [Architecture](#-storage-architecture) •
-[Limitations](#️-current-limitations-v010) •
+[Limitations](#️-current-limitations-v110) •
 [API Docs](https://Raiza04.github.io/rax/)
 
 </div>
@@ -61,19 +61,18 @@ Unlike traditional disk encryption tools that mount an entire filesystem into th
 Downloads the latest precompiled release binary, verifies its SHA-256 checksum, and installs `rax` globally into `/usr/local/bin`:
 
 ```bash
-curl -sSL [https://raw.githubusercontent.com/Raiza04/rax/master/install.sh](https://raw.githubusercontent.com/Raiza04/rax/master/install.sh) | bash
+curl -sSL https://raw.githubusercontent.com/Raiza04/rax/master/install.sh | bash
 ```
 
 ### 2. Install via Cargo (One-Liner from Source)
 If you have the Rust toolchain installed, Cargo can compile and place the binary directly into `~/.cargo/bin/rax`:
 
 ```bash
-cargo install --git [https://github.com/Raiza04/rax.git](https://github.com/Raiza04/rax.git)
+cargo install --git https://github.com/Raiza04/rax.git
 ```
-
 ### 3. Manual Build from Source
 ```bash
-git clone [https://github.com/Raiza04/rax.git](https://github.com/Raiza04/rax.git)
+git clone https://github.com/Raiza04/rax.git
 cd rax
 cargo build --release
 
