@@ -14,10 +14,10 @@
 [![KDF](https://img.shields.io/badge/KDF-Argon2id-00599C.svg)](https://en.wikipedia.org/wiki/Argon2)
 
 [Features](#-key-security-features) •
-[Why rax?](#-why-rax-instead-of-veracrypt) •
+[Why rax?](#why-rax) •
 [Installation](#-installation) •
 [Usage](#-usage) •
-[Architecture](#-storage-architecture) •
+[Architecture](#storage-architecture) •
 [Limitations](#️-current-limitations-v110) •
 [API Docs](https://Raiza04.github.io/rax/)
 
@@ -43,6 +43,7 @@ Unlike traditional disk encryption tools that mount an entire filesystem into th
 
 ---
 
+<a name="why-rax"></a>
 ## ⚖️ Why `rax` Instead of VeraCrypt?
 
 | Feature / Threat Vector | `rax` (User-Space VFS) | VeraCrypt / LUKS (Kernel Mount) |
@@ -128,6 +129,7 @@ Locking vault...
 
 ---
 
+<a name="storage-architecture"></a>
 ## 🗄️ Storage Architecture
 
 A `.rax` container is divided into a reserved **1 MB System Lobby** (Blocks `0..255`) and a **4096-Byte Data Grid** (Block `256+`):
