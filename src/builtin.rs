@@ -5,6 +5,7 @@
 //! (like tables for `ls`) and safety guarantees (like UTF-8 validation for `cat`).
 
 use crate::vault::Vault;
+use chrono::{DateTime, Local};
 use std::env;
 use std::fs::OpenOptions;
 use std::io::Write;
@@ -20,20 +21,71 @@ use zeroize::Zeroize;
 ///
 /// # Arguments
 /// * `vault` - A reference to the currently open vault.
-pub fn ls(vault: &Vault) {
+/// * `detail` - If true, additional metadata (like timestamps) will be displayed for each file.
+pub fn ls(vault: &Vault, detail: bool) {
     if vault.table.files.is_empty() {
         println!("(Vault is empty)");
         return;
     }
 
-    println!("{:<30} | {:<10}", "Name", "Size");
-    println!("{:-<30}-+-{:-<10}", "", "");
+    if !detail {
+        for inode in vault.table.files.iter() {
+            println!("{}", inode.name);
+        }
+        return;
+    }
+
+    println!("{:<30} | {:<10} | {:<20}", "Name", "Size", "Created");
+    println!("{:-<30}-+-{:-<10}-+-{:-<20}", "", "", "");
 
     for inode in vault.table.files.iter() {
-        // div_ceil rounds up, so a 1-byte file shows as 1 KB instead of 0 KB
-        let size_kb = inode.size_bytes.div_ceil(1024);
+        let dt_uts =
+            DateTime::from_timestamp(inode.created_at as i64, 0).expect("Invalid timestamps");
+        let dt_local: DateTime<Local> = dt_uts.with_timezone(&Local);
 
-        println!("{:<30} | {} KB", inode.name, size_kb);
+        println!(
+            "{:<30} | {:<10} | {} ",
+            inode.name,
+            format_size(inode.size_bytes),
+            dt_local.format("%Y-%m-%d %H:%M:%S")
+        );
+    }
+
+    let total_data_blocks = vault.table.free_blocks.len();
+    let total_data_bytes = total_data_blocks * 4096;
+
+    let allocated_blocks = vault.table.free_blocks.iter().filter(|&&b| b).count();
+    let allocated_bytes = allocated_blocks * 4096;
+
+    let relative_allocation = (allocated_bytes as f64 / total_data_bytes as f64) * 100.0;
+
+    println!("{:-<30}-+-{:-<10}-+-{:-<20}", "", "", "");
+
+    println!(
+        "Vault capacity: {} / {} used [{:.2}%]",
+        format_size(allocated_bytes as u64),
+        format_size(total_data_bytes as u64),
+        relative_allocation
+    );
+}
+
+/// formats a file size in bytes into a human-readable string with appropriate units (B, KB, MB,
+/// GB).
+///
+/// # Arguments
+/// * `size_bytes` - The size of the file in bytes.
+///
+/// # Returns
+/// returns a `String` representing the formatted size.
+fn format_size(size_bytes: u64) -> String {
+    if size_bytes < 1024 {
+        format!("{} B", size_bytes)
+    } else if size_bytes < 1024 * 1024 {
+        format!("{:.2} KB", size_bytes as f64 / 1024.0)
+    } else if size_bytes < 1024 * 1024 * 1024 {
+        format!("{:.2} MB", size_bytes as f64 / (1024.0 * 1024.0))
+    } else {
+        format!("{:.2} GB", size_bytes as f64 / (1024.0 * 1024.0 * 1024.0))
     }
 }
 
@@ -170,4 +222,16 @@ pub fn edit(vault: &mut Vault, filename: &str) -> Result<()> {
     let _ = std::fs::remove_file(&tmp_path);
 
     edit_result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_size_units() {
+        assert_eq!(format_size(52), "52 B");
+        assert_eq!(format_size(2048), "2.00 KB");
+        assert_eq!(format_size(8 * 1024 * 1024), "8.00 MB");
+    }
 }
