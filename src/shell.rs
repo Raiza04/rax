@@ -301,7 +301,12 @@ struct ReplCli {
 #[derive(Subcommand)]
 enum ReplCommands {
     /// Lists all files currently stored in the vault, displaying names and sizes.
-    Ls,
+    Ls {
+        /// Provides additional metadata for each file, such as creation and modification
+        /// timestamps.
+        #[arg(short, long)]
+        detail: bool,
+    },
 
     /// Imports a plaintext file from the host OS into the encrypted vault.
     Put {
@@ -387,8 +392,8 @@ pub fn run_shell(vault: &mut Vault) -> Result<()> {
 
                 match ReplCli::try_parse_from(clap_args) {
                     Ok(cli) => match cli.command {
-                        Some(ReplCommands::Ls) => {
-                            crate::builtin::ls(vault);
+                        Some(ReplCommands::Ls { detail }) => {
+                            crate::builtin::ls(vault, detail);
                         }
                         Some(ReplCommands::Put { path, remove }) => {
                             match vault.put_file(&path, &remove).and_then(|_| vault.sync()) {
