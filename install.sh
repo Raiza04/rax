@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="YOUR_GITHUB_USERNAME/rax"
+REPO="Raiza04/rax"
 INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="rax"
 
