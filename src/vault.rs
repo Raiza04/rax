@@ -158,6 +158,86 @@ impl Vault {
         })
     }
 
+    /// Dynamically expands the vault container in-place by appending cryptographic noise.
+    ///
+    /// Enforces crash-consistency by validating the 1 MB system lobby limit before touching
+    /// the disk, writing all random filler blocks first, and only committing the resized
+    /// `InodeTable` afterward. If an I/O error occurs mid-operation, the container file and
+    /// in-memory table are rolled back to their previous state.
+    ///
+    /// # Arguments
+    /// * `additional_mb` - Number of megabytes to append to the vault container.
+    ///   Passing `0` is a no-op and immediately returns `Ok(())`.
+    ///
+    /// # Returns
+    /// * `Ok(())` if the container was successfully expanded and metadata synced to disk.
+    ///
+    /// # Errors
+    /// Returns an `std::io::Error` if:
+    /// * `additional_mb` causes an arithmetic overflow (`ErrorKind::InvalidInput`).
+    /// * The expanded `InodeTable` would exceed the reserved 1 MB system lobby (`ErrorKind::InvalidInput`).
+    /// * Seeking, writing random noise, or syncing the updated metadata fails on the host OS.
+    pub fn grow(&mut self, additional_mb: usize) -> Result<()> {
+        if additional_mb == 0 {
+            return Ok(());
+        }
+
+        const LOBBY_SIZE: usize = 256 * 4096; // 1 MB reserved header region
+        const INODE_TABLE_OFFSET: usize = 80; // Magic + Salt + Auth chunk
+        const CHUNK_OVERHEAD: usize = 8 + 12 + 16; // Length prefix + Nonce + AES-GCM tag
+
+        let additional_blocks = additional_mb
+            .checked_mul(256)
+            .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Requested size overflow"))?;
+
+        let current_table_len = self.table.to_bytes()?.len();
+
+        // Verify the grown InodeTable will not overflow into data block 256
+        let projected_lobby_usage = INODE_TABLE_OFFSET
+            .checked_add(CHUNK_OVERHEAD)
+            .and_then(|v| v.checked_add(current_table_len))
+            .and_then(|v| v.checked_add(additional_blocks))
+            .ok_or_else(|| Error::new(ErrorKind::InvalidInput, "Lobby size overflow"))?;
+
+        if projected_lobby_usage > LOBBY_SIZE {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Cannot grow vault: expanded InodeTable would exceed the 1 MB system lobby",
+            ));
+        }
+
+        let old_block_count = self.table.free_blocks.len();
+        let original_len = (old_block_count as u64) * 4096;
+
+        // Seek to the exact end of the currently tracked block grid
+        self.file.seek(SeekFrom::Start(original_len))?;
+
+        // Append 1 MB chunks of CSPRNG noise; roll back file length on disk failure
+        let mut rng = rand::rng();
+        let mut buffer = vec![0u8; 1024 * 1024];
+
+        for _ in 0..additional_mb {
+            rng.fill(&mut buffer[..]);
+            if let Err(e) = self.file.write_all(&buffer) {
+                let _ = self.file.set_len(original_len);
+                let _ = self.file.sync_all();
+                return Err(e);
+            }
+        }
+        self.file.sync_all()?;
+
+        // Commit metadata change and roll back both RAM and disk if syncing fails
+        self.table.grow(additional_mb);
+        if let Err(e) = self.sync() {
+            self.table.free_blocks.truncate(old_block_count);
+            let _ = self.file.set_len(original_len);
+            let _ = self.file.sync_all();
+            return Err(e);
+        }
+
+        Ok(())
+    }
+
     /// Writes exactly 4096 bytes to the physical offset corresponding to the given block index.
     ///
     /// # Arguments
@@ -479,5 +559,68 @@ mod tests {
 
         let extracted = fs::read(&dest_path).unwrap();
         assert_eq!(extracted[0..23], b"Top Secret File Content"[..]);
+    }
+
+    /// Verifies that growing a vault expands the physical file, persists the updated
+    /// `InodeTable` across reopens, and leaves existing encrypted files intact.
+    #[test]
+    fn test_vault_grow_and_reopen() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+
+        let mut vault = Vault::create(&vault_path, 2, "admin123").unwrap();
+
+        // Store a file before growing to ensure existing data is untouched
+        let source_path = dir.path().join("keep.txt");
+        fs::write(&source_path, b"Still intact after grow!").unwrap();
+        vault
+            .put_file(source_path.to_str().unwrap(), &false)
+            .unwrap();
+        vault.sync().unwrap();
+
+        // Expand vault from 2 MB to 4 MB
+        vault.grow(2).unwrap();
+
+        // Verify exact physical file size on disk (4 MB)
+        let disk_size = fs::metadata(&vault_path).unwrap().len();
+        assert_eq!(disk_size, 4 * 1024 * 1024);
+
+        // Close and reopen to verify the grown InodeTable was persisted properly
+        drop(vault);
+        let mut reopened = Vault::open(&vault_path, "admin123").unwrap();
+        assert_eq!(reopened.table.free_blocks.len(), 4 * 256);
+
+        let content = reopened.read_file_to_memory("keep.txt").unwrap();
+        assert_eq!(content, b"Still intact after grow!");
+    }
+
+    /// Ensures that growing by 0 MB is a safe no-op that leaves file size and metadata unchanged.
+    #[test]
+    fn test_vault_grow_zero_is_noop() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+
+        let mut vault = Vault::create(&vault_path, 2, "admin123").unwrap();
+        vault.grow(0).unwrap();
+
+        assert_eq!(fs::metadata(&vault_path).unwrap().len(), 2 * 1024 * 1024);
+        assert_eq!(vault.table.free_blocks.len(), 2 * 256);
+    }
+
+    /// Ensures that exceeding the 1 MB system lobby limit is rejected before touching disk.
+    #[test]
+    fn test_vault_grow_exceeds_lobby_limit() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+
+        let mut vault = Vault::create(&vault_path, 2, "admin123").unwrap();
+
+        // 5000 MB = 1,280,000 blocks > 1 MB lobby capacity (~1,048,576 bytes)
+        let err = vault.grow(5000).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+
+        // Neither the physical file nor the in-memory table should have changed
+        assert_eq!(fs::metadata(&vault_path).unwrap().len(), 2 * 1024 * 1024);
+        assert_eq!(vault.table.free_blocks.len(), 2 * 256);
     }
 }
