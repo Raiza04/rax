@@ -47,6 +47,9 @@ enum Commands {
         #[arg(short, long)]
         remove: bool,
     },
+
+    /// Makes the vault file larger by allocating additional space.
+    Grow { size: usize },
 }
 
 /// Securely prompts the user twice for a new password and verifies they match.
@@ -98,31 +101,40 @@ fn run_app() -> Result<()> {
         }
 
         Some(Commands::Put { path, remove }) => {
-            let mut pass_auth = prompt_password("Enter the admin password: ")?;
-            let vault_path = get_vault_path()?;
-            let vault = Vault::open(&vault_path, &pass_auth);
-            pass_auth.zeroize();
-            let mut vault = vault?;
+            let mut vault = check_login()?;
 
             vault.put_file(path, remove)?;
             vault.sync()?;
 
             println!("File successfully encrypted and stored in vault.");
         }
+        Some(Commands::Grow { size }) => {
+            let mut vault = check_login()?;
 
+            vault.grow(*size)?;
+
+            println!("Vault successfully grown by {} MB.", size);
+        }
         None => {
-            let mut pass_auth = prompt_password("Enter the admin password: ")?;
-            let vault_path = get_vault_path()?;
-            let opened_vault = Vault::open(&vault_path, &pass_auth);
-            pass_auth.zeroize();
-            let mut opened_vault = opened_vault?;
+            let mut vault = check_login()?;
 
-            shell::run_shell(&mut opened_vault)?;
+            shell::run_shell(&mut vault)?;
         }
     }
 
     Ok(())
 }
+
+fn check_login() -> Result<Vault> {
+    let vault_path = get_vault_path()?;
+    let mut pass_auth = prompt_password("Enter the admin password: ")?;
+    let vault = Vault::open(&vault_path, &pass_auth);
+    pass_auth.zeroize();
+    let res_vault = vault?;
+
+    Ok(res_vault)
+}
+
 /// The main entry point.
 ///
 /// Wraps `run_app()` to provide a clean exit with an error code and a formatted

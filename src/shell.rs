@@ -4,7 +4,7 @@
 //! Bash-style tab completion, live syntax highlighting, and inline parameter hints.
 
 use std::borrow::Cow::{self, Borrowed, Owned};
-use std::io::Result;
+use std::io::{Error, Result};
 
 use clap::{Parser, Subcommand};
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
@@ -37,7 +37,9 @@ impl RaxHelper {
         Self {
             vault_files: files.iter().map(|f| f.name.clone()).collect(),
             host_completer: FilenameCompleter::new(),
-            commands: vec!["ls", "put", "get", "rm", "cat", "edit", "clear", "exit"],
+            commands: vec![
+                "ls", "put", "get", "rm", "cat", "edit", "clear", "exit", "grow",
+            ],
         }
     }
 
@@ -213,6 +215,7 @@ impl Hinter for RaxHelper {
                 "put" => Some("<host_path> [--remove]".to_string()),
                 "get" => Some("--file <vault_file> --dest <host_path>".to_string()),
                 "cat" | "edit" | "rm" => Some("<vault_file>".to_string()),
+                "grow" => Some("<size_in_MB>".to_string()),
                 _ => None,
             };
         }
@@ -347,6 +350,12 @@ enum ReplCommands {
         file: String,
     },
 
+    /// Makes the vault file larger by allocating additional space.
+    Grow {
+        /// The additional size in megabytes to allocate to the vault.
+        size: usize,
+    },
+
     /// Clears the terminal screen.
     Clear,
 }
@@ -361,8 +370,7 @@ pub fn run_shell(vault: &mut Vault) -> Result<()> {
         .completion_prompt_limit(20)
         .build();
 
-    let mut rl =
-        Editor::<RaxHelper, DefaultHistory>::with_config(config).map_err(std::io::Error::other)?;
+    let mut rl = Editor::<RaxHelper, DefaultHistory>::with_config(config).map_err(Error::other)?;
     let helper = RaxHelper::new(&vault.table.files);
     rl.set_helper(Some(helper));
 
@@ -417,16 +425,21 @@ pub fn run_shell(vault: &mut Vault) -> Result<()> {
                                 Err(e) => println!("Error removing file: {}", e),
                             }
                         }
-                        Some(ReplCommands::Cat { file }) => {
-                            if let Err(e) = crate::builtin::cat(vault, &file) {
-                                println!("Error reading file: {}", e);
-                            }
-                        }
+                        Some(ReplCommands::Cat { file }) => match crate::builtin::cat(vault, &file)
+                        {
+                            Ok(_) => {}
+                            Err(e) => println!("Error reading file: {}", e),
+                        },
                         Some(ReplCommands::Edit { file }) => {
-                            if let Err(e) = crate::builtin::edit(vault, &file) {
-                                println!("Error editing file: {}", e);
+                            match crate::builtin::edit(vault, &file) {
+                                Ok(_) => println!("File '{}' successfully edited.", file),
+                                Err(e) => println!("Error editing file: {}", e),
                             }
                         }
+                        Some(ReplCommands::Grow { size }) => match vault.grow(size) {
+                            Ok(_) => println!("Vault successfully grown by {} MB.", size),
+                            Err(e) => println!("Error growing vault: {}", e),
+                        },
                         Some(ReplCommands::Clear) => {
                             let _ = rl.clear_screen();
                         }

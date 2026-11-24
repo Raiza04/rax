@@ -257,4 +257,16 @@ mod tests {
         assert_eq!(original.free_blocks, restored.free_blocks);
         assert_eq!(original.block_size, restored.block_size);
     }
+
+    /// verifies that the `grow` method correctly expands the free block bitmap and maintains
+    /// reserved blocks.
+    #[test]
+    fn test_inode_table_grow() {
+        let mut original = InodeTable::new(3);
+        original.grow(2);
+
+        assert_eq!(original.free_blocks.len(), 5 * 256); // 3MB + 2MB = 5MB total, each MB = 256 blocks
+        assert!(original.free_blocks[0..256].iter().all(|&b| b)); // First 1MB reserved
+        assert!(original.free_blocks[256..].iter().all(|&b| !b)); // Remaining blocks should be free
+    }
 }

@@ -560,4 +560,67 @@ mod tests {
         let extracted = fs::read(&dest_path).unwrap();
         assert_eq!(extracted[0..23], b"Top Secret File Content"[..]);
     }
+
+    /// Verifies that growing a vault expands the physical file, persists the updated
+    /// `InodeTable` across reopens, and leaves existing encrypted files intact.
+    #[test]
+    fn test_vault_grow_and_reopen() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+
+        let mut vault = Vault::create(&vault_path, 2, "admin123").unwrap();
+
+        // Store a file before growing to ensure existing data is untouched
+        let source_path = dir.path().join("keep.txt");
+        fs::write(&source_path, b"Still intact after grow!").unwrap();
+        vault
+            .put_file(source_path.to_str().unwrap(), &false)
+            .unwrap();
+        vault.sync().unwrap();
+
+        // Expand vault from 2 MB to 4 MB
+        vault.grow(2).unwrap();
+
+        // Verify exact physical file size on disk (4 MB)
+        let disk_size = fs::metadata(&vault_path).unwrap().len();
+        assert_eq!(disk_size, 4 * 1024 * 1024);
+
+        // Close and reopen to verify the grown InodeTable was persisted properly
+        drop(vault);
+        let mut reopened = Vault::open(&vault_path, "admin123").unwrap();
+        assert_eq!(reopened.table.free_blocks.len(), 4 * 256);
+
+        let content = reopened.read_file_to_memory("keep.txt").unwrap();
+        assert_eq!(content, b"Still intact after grow!");
+    }
+
+    /// Ensures that growing by 0 MB is a safe no-op that leaves file size and metadata unchanged.
+    #[test]
+    fn test_vault_grow_zero_is_noop() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+
+        let mut vault = Vault::create(&vault_path, 2, "admin123").unwrap();
+        vault.grow(0).unwrap();
+
+        assert_eq!(fs::metadata(&vault_path).unwrap().len(), 2 * 1024 * 1024);
+        assert_eq!(vault.table.free_blocks.len(), 2 * 256);
+    }
+
+    /// Ensures that exceeding the 1 MB system lobby limit is rejected before touching disk.
+    #[test]
+    fn test_vault_grow_exceeds_lobby_limit() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+
+        let mut vault = Vault::create(&vault_path, 2, "admin123").unwrap();
+
+        // 5000 MB = 1,280,000 blocks > 1 MB lobby capacity (~1,048,576 bytes)
+        let err = vault.grow(5000).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidInput);
+
+        // Neither the physical file nor the in-memory table should have changed
+        assert_eq!(fs::metadata(&vault_path).unwrap().len(), 2 * 1024 * 1024);
+        assert_eq!(vault.table.free_blocks.len(), 2 * 256);
+    }
 }
