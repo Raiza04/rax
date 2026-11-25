@@ -7,6 +7,7 @@
 use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
 use std::io::Result;
+use std::path::PathBuf;
 use zeroize::Zeroize;
 
 mod builtin;
@@ -15,7 +16,7 @@ mod fs;
 mod shell;
 mod vault;
 
-use vault::{Vault, get_vault_path};
+use vault::{Vault, get_vault_path, import_vault};
 
 /// Command-line interface for the host OS.
 ///
@@ -50,6 +51,16 @@ enum Commands {
 
     /// Makes the vault file larger by allocating additional space.
     Grow { size: usize },
+
+    Import {
+        path: PathBuf,
+
+        #[arg(long, conflicts_with = "backup")]
+        force: bool,
+
+        #[arg(long, conflicts_with = "force")]
+        backup: bool,
+    },
 }
 
 /// Securely prompts the user twice for a new password and verifies they match.
@@ -114,6 +125,14 @@ fn run_app() -> Result<()> {
             vault.grow(*size)?;
 
             println!("Vault successfully grown by {} MB.", size);
+        }
+        Some(Commands::Import {
+            path,
+            force,
+            backup,
+        }) => {
+            let target = get_vault_path()?;
+            import_vault(path, &target, *force, *backup)?;
         }
         None => {
             let mut vault = check_login()?;
