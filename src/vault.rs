@@ -7,7 +7,9 @@ use directories::ProjectDirs;
 use rand::RngExt;
 use std::fs::{self, File};
 use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
+use std::path::Path;
 use std::path::PathBuf;
+use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use zeroize::Zeroize;
 
@@ -480,6 +482,124 @@ pub fn get_vault_path() -> Result<PathBuf> {
     Ok(data_dir.join("vault.rax"))
 }
 
+/// Imports an existing `.rax` vault file into the target vault location.
+///
+/// Validates that the source is a regular file with valid `RAX1` magic bytes before
+/// modifying the destination. Protects against accidental data loss by rejecting
+/// self-imports and refusing to overwrite an existing vault unless `force` or `backup`
+/// is explicitly enabled.
+///
+/// When `backup` is enabled and a vault already exists at `target`, the existing file
+/// is moved to a timestamped backup (`<filename>.bak_<unix_timestamp>`) in the same
+/// directory before copying the new vault. If copying fails, the original vault is
+/// automatically restored from the backup.
+///
+/// # Arguments
+/// * `source` - Path to the external `.rax` vault file to import.
+/// * `target` - Destination path where the vault should be installed (typically from `get_vault_path`).
+/// * `force` - If `true`, overwrites an existing vault at `target` without creating a backup.
+/// * `backup` - If `true`, renames an existing vault at `target` to a timestamped `.bak` file before importing.
+///
+/// # Returns
+/// * `Ok(())` if the vault was validated and copied to `target` successfully.
+///
+/// # Errors
+/// Returns an `std::io::Error` if:
+/// * `source` does not exist or is not a regular file (`ErrorKind::NotFound`).
+/// * `source` and `target` resolve to the same physical file (`ErrorKind::InvalidInput`).
+/// * Both `force` and `backup` are set simultaneously (`ErrorKind::InvalidInput`).
+/// * `target` already exists while both `force` and `backup` are `false` (`ErrorKind::AlreadyExists`).
+/// * `source` does not start with valid `RAX1` magic bytes (`ErrorKind::InvalidData`).
+/// * Any underlying filesystem read, rename, or copy operation fails.
+///
+/// # Examples
+/// ```no_run
+/// use std::path::Path;
+///
+/// let source = Path::new("/home/user/Downloads/vault.rax");
+/// let target = Path::new("/home/user/.local/share/rax/vault.rax");
+///
+/// // Import while safely preserving any pre-existing vault as a timestamped backup
+/// import_vault(source, target, false, true).unwrap();
+/// ```
+pub fn import_vault(source: &Path, target: &Path, force: bool, backup: bool) -> Result<()> {
+    if force && backup {
+        return Err(Error::new(
+            ErrorKind::InvalidInput,
+            "Cannot use --force and --backup at the same time.",
+        ));
+    }
+
+    if !source.is_file() {
+        return Err(Error::new(
+            ErrorKind::NotFound,
+            "Source path does not exist or is not a regular file.",
+        ));
+    }
+
+    if target.exists() {
+        if fs::canonicalize(source)? == fs::canonicalize(target)? {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                "Source and target paths are the same.",
+            ));
+        }
+
+        if !force && !backup {
+            return Err(Error::new(
+                ErrorKind::AlreadyExists,
+                "Target vault already exists. Use --force to overwrite or --backup to preserve the existing file.",
+            ));
+        }
+    }
+
+    // Validate header before touching any existing vault at the target location
+    let mut file = fs::File::open(source)?;
+    let mut magic_bytes = [0u8; 4];
+    file.read_exact(&mut magic_bytes)?;
+
+    if &magic_bytes != b"RAX1" {
+        return Err(Error::new(
+            ErrorKind::InvalidData,
+            "Source file is not a valid rax vault (invalid magic bytes).",
+        ));
+    }
+
+    // Move existing target aside if backup was requested
+    let mut backup_path = None;
+    if backup && target.exists() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let file_name = target
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("vault.rax");
+        let path = target.with_file_name(format!("{}.bak_{}", file_name, timestamp));
+
+        fs::rename(target, &path)?;
+        println!("Backup created at: {}", path.display());
+        backup_path = Some(path);
+    }
+
+    // Copy the validated vault; roll back the backup if copying fails
+    if let Err(e) = fs::copy(source, target) {
+        if let Some(ref bak) = backup_path {
+            let _ = fs::rename(bak, target);
+        }
+        return Err(e);
+    }
+
+    println!(
+        "Vault imported from '{}' to '{}'",
+        source.display(),
+        target.display()
+    );
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -622,5 +742,135 @@ mod tests {
         // Neither the physical file nor the in-memory table should have changed
         assert_eq!(fs::metadata(&vault_path).unwrap().len(), 2 * 1024 * 1024);
         assert_eq!(vault.table.free_blocks.len(), 2 * 256);
+    }
+
+    /// Verifies that a valid `.rax` vault can be imported to an empty target location
+    /// and opened with its original password afterward.
+    #[test]
+    fn test_import_vault_success() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("downloaded.rax");
+        let target = dir.path().join("vault.rax");
+
+        Vault::create(&source, 2, "import_pass").unwrap();
+
+        import_vault(&source, &target, false, false).unwrap();
+
+        assert!(target.is_file());
+        let opened = Vault::open(&target, "import_pass").unwrap();
+        assert_eq!(opened.table.free_blocks.len(), 2 * 256);
+    }
+
+    /// Ensures non-vault files (invalid magic bytes) are rejected before modifying the target.
+    #[test]
+    fn test_import_vault_invalid_magic_bytes() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("fake.rax");
+        let target = dir.path().join("vault.rax");
+
+        fs::write(&source, b"NOT_A_RAX_VAULT").unwrap();
+
+        let err = import_vault(&source, &target, false, false).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::InvalidData);
+        assert!(!target.exists());
+    }
+
+    /// Ensures importing onto an existing target fails safely without `--force` or `--backup`.
+    #[test]
+    fn test_import_vault_collision_fails_without_flags() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("new.rax");
+        let target = dir.path().join("vault.rax");
+
+        Vault::create(&target, 2, "old_pass").unwrap();
+        Vault::create(&source, 2, "new_pass").unwrap();
+
+        let err = import_vault(&source, &target, false, false).unwrap_err();
+        assert_eq!(err.kind(), ErrorKind::AlreadyExists);
+
+        // Existing vault must remain completely untouched
+        assert!(Vault::open(&target, "old_pass").is_ok());
+    }
+
+    /// Verifies that `--backup` preserves the old vault as a timestamped `.bak_` file
+    /// while installing the new vault at the target path.
+    #[test]
+    fn test_import_vault_backup_preserves_existing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("new.rax");
+        let target = dir.path().join("vault.rax");
+
+        Vault::create(&target, 2, "old_pass").unwrap();
+        Vault::create(&source, 2, "new_pass").unwrap();
+
+        import_vault(&source, &target, false, true).unwrap();
+
+        // Target now holds the newly imported vault
+        assert!(Vault::open(&target, "new_pass").is_ok());
+        assert!(Vault::open(&target, "old_pass").is_err());
+
+        // Locate the timestamped backup without depending on an exact second
+        let backups: Vec<PathBuf> = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.starts_with("vault.rax.bak_"))
+            })
+            .collect();
+
+        assert_eq!(backups.len(), 1);
+        assert!(Vault::open(&backups[0], "old_pass").is_ok());
+    }
+
+    /// Verifies that `--force` overwrites an existing vault without creating a backup file.
+    #[test]
+    fn test_import_vault_force_overwrites_existing() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("new.rax");
+        let target = dir.path().join("vault.rax");
+
+        Vault::create(&target, 2, "old_pass").unwrap();
+        Vault::create(&source, 2, "new_pass").unwrap();
+
+        import_vault(&source, &target, true, false).unwrap();
+
+        assert!(Vault::open(&target, "new_pass").is_ok());
+        assert!(Vault::open(&target, "old_pass").is_err());
+
+        let has_backup = fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .any(|e| {
+                e.file_name()
+                    .to_str()
+                    .is_some_and(|n| n.starts_with("vault.rax.bak_"))
+            });
+        assert!(!has_backup);
+    }
+
+    /// Covers defensive edge cases: self-import, conflicting flags, and missing source paths.
+    #[test]
+    fn test_import_vault_edge_cases() {
+        let dir = tempdir().unwrap();
+        let vault_path = dir.path().join("vault.rax");
+        let missing_path = dir.path().join("does_not_exist.rax");
+
+        Vault::create(&vault_path, 2, "same_pass").unwrap();
+
+        // 1. Self-import must be rejected without corrupting the vault
+        let self_err = import_vault(&vault_path, &vault_path, true, false).unwrap_err();
+        assert_eq!(self_err.kind(), ErrorKind::InvalidInput);
+        assert!(Vault::open(&vault_path, "same_pass").is_ok());
+
+        // 2. Simultaneous --force and --backup must be rejected
+        let conflict_err = import_vault(&vault_path, &missing_path, true, true).unwrap_err();
+        assert_eq!(conflict_err.kind(), ErrorKind::InvalidInput);
+
+        // 3. Non-existent source path must return NotFound
+        let missing_err = import_vault(&missing_path, &vault_path, true, false).unwrap_err();
+        assert_eq!(missing_err.kind(), ErrorKind::NotFound);
     }
 }
