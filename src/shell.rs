@@ -443,7 +443,7 @@ pub fn run_shell(vault: &mut Vault) -> Result<()> {
                         }
                         Some(ReplCommands::Grow { size }) => match vault.grow(size) {
                             Ok(_) => {
-                                ui::error(&format!("Vault successfully grown by {} MB.", size))
+                                ui::success(&format!("Vault successfully grown by {} MB.", size))
                             }
                             Err(e) => ui::error(&format!("growing vault failed: {}", e)),
                         },

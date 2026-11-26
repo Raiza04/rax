@@ -4,32 +4,6 @@ Project backlog and technical milestones for the `rax` Encrypted Virtual File Sy
 
 ---
 
-## ⚡ Milestone v1.2.0 — Shell UX & Non-Breaking Enhancements
-*Focus: Improving interactive usability and container management without breaking backwards compatibility with v1.1.0 `.rax` vaults.*
-
-### ⌨️ 1. Tab Completion & Interactive Shell
-- [ ] **Custom Rustyline helper:**
-  - [ ] Implement `Completer`, `Hinter`, and `Validator` traits for the `rax>` REPL
-- [ ] **Command & context-aware autocompletion:**
-  - [ ] Auto-complete built-in commands (`ls`, `cat`, `put`, `get`, `rm`, `edit`, `clear`, `exit`)
-  - [ ] Internal commands (`cat`, `edit`, `rm`, `get`): Suggest existing filenames from the active `InodeTable`
-  - [ ] External commands (`put`): Suggest matching file paths from the host OS filesystem
-
-### 🎨 2. Terminal UI & Feedback Polish
-- [ ] **Enhanced `ls` formatting:**
-  - [ ] Display human-readable creation timestamps, exact byte/KB/MB sizes, and occupied block counts
-  - [ ] Add vault capacity summary footer (e.g., `Used: 12.4 MB / 50.0 MB [24%]`)
-- [ ] **Visual indicators:**
-  - [ ] Consistent ANSI color scheme (green for success, yellow for warnings, red for errors)
-  - [ ] Integrate `indicatif` progress bars for large file imports/exports and initial vault creation
-
-### 📈 3. Dynamic Vault Resizing (`grow`)
-- [ ] **Expand existing containers in-place:**
-  - [ ] Implement `grow <size_mb>` command to append cryptographic RNG noise to the end of `vault.rax`
-  - [ ] Extend the `free_blocks` bitmap in `InodeTable` and sync atomically
-
----
-
 ## 🚀 Milestone v2.0.0 — Core VFS Overhaul & Plausible Deniability
 *Focus: Major breaking changes to the binary container layout, hierarchical filesystem structures, hidden volumes, and cross-platform memory locking.*
 
@@ -68,7 +42,27 @@ Project backlog and technical milestones for the `rax` Encrypted Virtual File Sy
 
 ---
 
-## ✅ Completed (v0.1.0 MVP)
+## ✅ Completed
+
+### ⚡ v1.2.0 — Shell UX, UI Polish & Vault Management
+*Non-breaking usability and container management enhancements, fully compatible with `RAX1` vaults.*
+
+- [x] **Tab Completion, Syntax Highlighting & Hints (`RaxHelper`):**
+  - [x] Implemented `Completer`, `Hinter`, `Highlighter`, and `Validator` traits for the `rax>` REPL
+  - [x] Context-aware Bash-style tab completion for built-in commands, vault filenames (`cat`, `edit`, `rm`, `get --file`), flags (`--file`, `--dest`), and host OS paths (`put`, `get --dest`)
+  - [x] Live ANSI syntax highlighting and dimmed inline parameter blueprints
+- [x] **Terminal UI & Feedback Polish:**
+  - [x] Enhanced `ls -d` / `--detail` view with human-readable sizes (`B`/`KB`/`MB`/`GB`), local creation timestamps, and a vault capacity summary footer (`Vault capacity: X / Y used [Z%]`)
+  - [x] Semantic ANSI status output helpers (`ui::success`, `ui::warn`, `ui::info`, `ui::error`) and inline color utilities
+  - [x] `indicatif` byte-based progress bars with throughput & ETA for vault creation, resizing (`grow`), file encryption (`put`), and decryption (`get`)
+- [x] **Dynamic Vault Resizing (`grow`):**
+  - [x] Added `grow <size>` command in both host CLI and interactive `rax>` shell
+  - [x] Appends CSPRNG noise in 1 MB chunks, validates the 1 MB system lobby limit before touching disk, extends `InodeTable::free_blocks`, and rolls back safely on I/O failure
+- [x] **Vault Portability & Import (`import`):**
+  - [x] Added `rax import <path> [--backup | --force]` host CLI command
+  - [x] Validates `RAX1` magic bytes, blocks self-imports and unintended overwrites, and supports timestamped backups (`.bak_<timestamp>`) with automatic rollback on copy failure
+
+### 🔐 v1.1.0 / v0.1.0 MVP
 - [x] AES-256-GCM 4096-byte block encryption & tamper-proof MAC verification
 - [x] Argon2id memory-hard master key derivation
 - [x] Custom block allocator and `bincode`-serialized `InodeTable`

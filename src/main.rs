@@ -128,7 +128,7 @@ fn run_app() -> Result<()> {
             ui::info(&format!("Growing vault by {} MB...", size));
             vault.grow(*size)?;
 
-            ui::info("Vault successfully extended");
+            ui::success("Vault successfully extended");
         }
         Some(Commands::Import {
             path,

@@ -13,12 +13,12 @@
 [![Encryption](https://img.shields.io/badge/encryption-AES--256--GCM-8A2BE2.svg)](https://en.wikipedia.org/wiki/Galois/Counter_Mode)
 [![KDF](https://img.shields.io/badge/KDF-Argon2id-00599C.svg)](https://en.wikipedia.org/wiki/Argon2)
 
-[Features](#-key-security-features) •
+[Features](#-key-features) •
 [Why rax?](#why-rax) •
 [Installation](#-installation) •
 [Usage](#-usage) •
 [Architecture](#storage-architecture) •
-[Limitations](#️-current-limitations-v110) •
+[Limitations](#limitations) •
 [API Docs](https://Raiza04.github.io/rax/)
 
 </div>
@@ -33,13 +33,20 @@ Unlike traditional disk encryption tools that mount an entire filesystem into th
 
 ---
 
-## ✨ Key Security Features
+## ✨ Key Features
 
-* **🔒 Authenticated Block Cryptography:** Uses **AES-256-GCM** mapped to a fixed `4096`-byte physical block grid (`12`-byte CSPRNG Nonce + `4068`-byte payload + `16`-byte Poly1305 MAC tag). Every block is cryptographically authenticated to detect bit-rot or tampering immediately.
-* **🧠 Memory-Hard Key Derivation:** Master keys are derived on the fly via **Argon2id** paired with a 32-byte per-vault cryptographic salt, defending against GPU-accelerated brute-force attacks.
-* **🧹 Volatile RAM Wiping (`zeroize`):** All plaintext file buffers, derived key slices, and password strings are explicitly overwritten with zeros in RAM using volatile memory operations before going out of scope.
-* **⚡ Zero-SSD-Trace Editing (`/dev/shm`):** When editing a file via `edit`, `rax` extracts the decrypted stream exclusively into Linux Shared Memory (`/dev/shm` RAM disk), launches your `$VISUAL` / `$EDITOR` (or `nano`), re-encrypts the updated file on exit, and zeros out the volatile buffer—never touching physical NAND flash.
-* **🎲 Cryptographic Noise Initialization:** Newly created `.rax` containers are pre-filled with CSPRNG noise from byte zero to mask actual file allocation boundaries.
+### 🔒 Security
+* **Authenticated Block Cryptography:** Uses **AES-256-GCM** mapped to a fixed `4096`-byte physical block grid (`12`-byte CSPRNG Nonce + `4068`-byte payload + `16`-byte Poly1305 MAC tag). Every block is cryptographically authenticated to detect bit-rot or tampering immediately.
+* **Memory-Hard Key Derivation:** Master keys are derived on the fly via **Argon2id** paired with a 32-byte per-vault cryptographic salt, defending against GPU-accelerated brute-force attacks.
+* **Volatile RAM Wiping (`zeroize`):** All plaintext file buffers, derived key slices, and password strings are explicitly overwritten with zeros in RAM using volatile memory operations before going out of scope.
+* **Zero-SSD-Trace Editing (`/dev/shm`):** When editing a file via `edit`, `rax` extracts the decrypted stream exclusively into Linux Shared Memory (`/dev/shm` RAM disk), launches your `$VISUAL` / `$EDITOR` (or `nano`), re-encrypts the updated file on exit, and zeros out the volatile buffer—never touching physical NAND flash.
+* **Cryptographic Noise Initialization:** Newly created and expanded `.rax` containers are filled with CSPRNG noise from byte zero to mask actual file allocation boundaries.
+
+### ⚡ Shell UX & Vault Management
+* **Smart Interactive REPL (`rustyline`):** Context-aware Bash-style **tab completion** (commands, vault filenames, and host OS paths), **live syntax highlighting**, and dimmed **inline parameter hints**.
+* **Dynamic In-Place Resizing (`grow`):** Expand an existing vault container at any time by appending cryptographic noise and atomically extending the block allocation table—with built-in rollback on I/O errors.
+* **Safe Vault Portability (`import`):** Import external `.rax` containers into your local data directory with `RAX1` header validation, collision protection, and optional timestamped backups (`--backup`).
+* **Rich Terminal Feedback:** Detailed `ls -d` view with human-readable sizes, creation timestamps, and capacity usage, paired with semantic ANSI status indicators and `indicatif` progress bars for heavy I/O operations.
 
 ---
 
@@ -52,7 +59,7 @@ Unlike traditional disk encryption tools that mount an entire filesystem into th
 | **OS Indexing & Telemetry** | **Immune** (OS cannot see inside the open vault) | **Exposed** (Spotlight, Windows Search, & thumbs index mounted drives) |
 | **SSD Wear-Leveling Leaks** | **Prevented** (`cat` and `edit` stay strictly in RAM) | **Risk via Temp Files** (editors often write `.swp` files to host disk) |
 | **Explicit RAM Zeroization** | **Enforced** after every single command | Keys stay mounted in kernel memory until dismount |
-| **Workflow** | Instant CLI commands & dedicated `rax>` shell | Heavy GUI or multi-step loop-device mounting |
+| **Workflow** | Instant CLI commands & smart `rax>` shell | Heavy GUI or multi-step loop-device mounting |
 
 ---
 
@@ -62,7 +69,7 @@ Unlike traditional disk encryption tools that mount an entire filesystem into th
 Downloads the latest precompiled release binary, verifies its SHA-256 checksum, and installs `rax` globally into `/usr/local/bin`:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Raiza04/rax/master/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Raiza04/rax/main/install.sh | bash
 ```
 
 ### 2. Install via Cargo (One-Liner from Source)
@@ -71,6 +78,7 @@ If you have the Rust toolchain installed, Cargo can compile and place the binary
 ```bash
 cargo install --git https://github.com/Raiza04/rax.git
 ```
+
 ### 3. Manual Build from Source
 ```bash
 git clone https://github.com/Raiza04/rax.git
@@ -86,13 +94,19 @@ sudo install -m 755 target/release/rax /usr/local/bin/rax
 ## 🚀 Usage
 
 ### 1. Host Terminal Commands (Bash / Zsh)
-Initialize a new encrypted vault (stored at `~/.local/share/rax/vault.rax` by default) or import files directly from your host shell:
+Create or import a vault (stored at `~/.local/share/rax/vault.rax` by default), resize it, or import files directly from your host shell:
 
 ```bash
 # Create a new 50 MB encrypted vault
 rax create --size 50
 
-# Import a file directly from the host OS and delete the plaintext original
+# Or import an existing .rax vault (backing up any existing vault first)
+rax import ~/Downloads/vault.rax --backup
+
+# Expand your vault in-place by an additional 25 MB
+rax grow 25
+
+# Import a file from the host OS and remove the plaintext original
 rax put ~/Documents/recovery_codes.txt --remove
 
 # Launch the interactive rax shell
@@ -100,32 +114,62 @@ rax
 ```
 
 ### 2. Interactive Shell (`rax>`)
-Once authenticated, `rax` drops you into an isolated shell environment with command history:
+Once authenticated, `rax` drops you into an isolated shell with command history, context-aware tab completion, live syntax highlighting, and inline parameter hints:
 
 ```text
-Welcome to the rax shell. Type 'exit' to quit.
-rax> ls
-Name                           | Size
--------------------------------+-----------
-recovery_codes.txt             | 1 KB
+Info: Entering interactive shell. Type 'help' for commands, or 'exit' to quit.
+rax> ls -d
+Name                           | Size       | Created
+-------------------------------+------------+---------------------
+recovery_codes.txt             | 1.24 KB    | 2026-11-26 18:10:42
+-------------------------------+------------+---------------------
+Vault capacity: 1.00 MB / 75.00 MB used [1.34%]
 
 rax> cat recovery_codes.txt
 1. 8f9a-22b1-90c4
 2. 7d1e-44a9-11b2
 
 rax> edit recovery_codes.txt
-File 'recovery_codes.txt' successfully updated.
+✔ File 'recovery_codes.txt' successfully edited.
 
 rax> get --file recovery_codes.txt --dest /tmp/exported_codes.txt
-'recovery_codes.txt' successfully extracted.
+✔ 'recovery_codes.txt' successfully extracted.
 
 rax> rm recovery_codes.txt
-File 'recovery_codes.txt' permanently removed from vault.
+✔ File 'recovery_codes.txt' permanently removed from vault.
 
-rax> clear
 rax> exit
-Locking vault...
+Info: Locking vault...
 ```
+
+<details>
+<summary><strong>📖 Essential Command Reference (Click to expand)</strong></summary>
+
+### Host CLI Commands
+
+| Command | Description |
+| :--- | :--- |
+| `rax` | Authenticate and open the interactive `rax>` shell |
+| `rax create --size <MB>` | Create a new encrypted vault pre-filled with CSPRNG noise (`-s`) |
+| `rax import <PATH> [--backup \| --force]` | Import an existing `.rax` vault into the default location. Validates `RAX1` magic bytes; refuses to overwrite unless `--backup` (saves existing vault as `.bak_<timestamp>`) or `--force` is specified |
+| `rax grow <MB>` | Dynamically expand the vault container in-place by appending cryptographic noise |
+| `rax put <PATH> [--remove]` | Encrypt and store a host file directly from the terminal (`-r` removes the plaintext original) |
+
+### Interactive Shell (`rax>`) Commands
+
+| Command | Description |
+| :--- | :--- |
+| `ls [-d \| --detail]` | List stored files; `-d` displays human-readable sizes, creation timestamps, and a vault capacity footer |
+| `put <PATH> [-r \| --remove]` | Import a file from the host OS into the vault (supports host path tab completion) |
+| `get -f <FILE> -d <DEST>` | Decrypt and extract a file from the vault to the host OS (`--file`, `--dest`) |
+| `cat <FILE>` | Decrypt a UTF-8 text file directly into RAM and print it |
+| `edit <FILE>` | Edit a text file in `/dev/shm` RAM disk using `$VISUAL`, `$EDITOR`, or `nano` |
+| `rm <FILE>` | Permanently remove a file and deallocate its physical blocks |
+| `grow <MB>` | Expand the active vault container in-place |
+
+> Run `rax --help` on the host or `help` inside `rax>` to see all available commands and flags.
+
+</details>
 
 ---
 
@@ -151,14 +195,15 @@ Full module documentation is automatically built and hosted via **GitHub Pages**
 
 ---
 
-## ⚠️ Current Limitations (v1.1.0)
+<a name="limitations"></a>
+## ⚠️ Current Limitations (v1.2.0)
 
-In the spirit of transparent security engineering, please note the architectural constraints of the current `v1.1.0` MVP release:
+In the spirit of transparent security engineering, please note the architectural constraints of the current `v1.2.0` release:
 
 1. **Linux-Only In-Memory Editing (`/dev/shm`):** The `edit` command relies on `/dev/shm` (Shared Memory RAM disk) to pass decrypted files to external terminal editors (`vim`, `nano`) without touching the SSD. Consequently, `edit` is currently only supported on Linux. (A built-in cross-platform TUI editor is planned for `v2.0`).
-2. **Flat File Structure:** `v1.1.0` uses a flat `InodeTable` without hierarchical subdirectories. Importing two files with the exact same filename is rejected to prevent collisions. Hierarchical directories (`mkdir`, `cd`, `pwd`) are scheduled for `v2.0`.
-3. **Static Container Size:** The total size of `vault.rax` is fixed upon creation (`rax create --size <MB>`). Dynamic in-place container expansion (`grow`) will be introduced in `v1.2.0`.
-4. **In-Memory File Streaming:** Commands like `cat` and `edit` decrypt the target file completely into a contiguous `Vec<u8>` buffer in RAM. While ideal for credentials, notes, source code, and documents, `v1.1.0` is not intended for multi-gigabyte video files.
+2. **Flat File Structure:** `v1.2.0` uses a flat `InodeTable` without hierarchical subdirectories. Importing two files with the exact same filename is rejected to prevent collisions. Hierarchical directories (`mkdir`, `cd`, `pwd`) are scheduled for `v2.0`.
+3. **1 MB Metadata Lobby Ceiling:** While `grow` enables dynamic in-place container expansion, the serialized `InodeTable` (file metadata + block allocation bitmap) must fit inside the reserved 1 MB system lobby; `grow` enforces this limit before touching disk. Fixed-block spanned headers are planned for `v2.0`.
+4. **In-Memory File Streaming:** Commands like `cat` and `edit` decrypt the target file completely into a contiguous `Vec<u8>` buffer in RAM. While ideal for credentials, notes, source code, and documents, `v1.2.0` is not intended for multi-gigabyte video files.
 5. **No Swap Locking (`mlock`) Yet:** While `zeroize` guarantees that buffers are wiped before deallocation, the OS kernel could theoretically swap active memory pages if system RAM is exhausted. OS-level memory locking (`mlock` / `VirtualLock`) is on the `v2.0` roadmap.
 
 ---
@@ -174,8 +219,10 @@ In the spirit of transparent security engineering, please note the architectural
 
 ## 🗺️ Roadmap Summary
 
-* **v1.2.0 (UX & Polish):** Tab-completion in `rustyline`, dynamic container resizing (`grow`), colorized output, and progress bars.
-* **v2.0.0 (Core VFS Overhaul):** Plausible Deniability (**Hidden Vaults** via dual-password lobby split), fixed-block headers, hierarchical directory trees (`mkdir`, `cd`), and `mlock` swap protection.
+* ✅ **v1.2.0 (UX & Vault Management — Released):** Context-aware tab completion, live syntax highlighting & inline hints in `rustyline`, dynamic in-place container resizing (`grow`), vault importing (`import`), detailed `ls -d` view, semantic ANSI output, and `indicatif` progress bars.
+* 🚀 **v2.0.0 (Core VFS Overhaul — Planned):** Plausible Deniability (**Hidden Vaults** via dual-password lobby split), fixed-block headers, hierarchical directory trees (`mkdir`, `cd`, `pwd`, `mv`), `mlock` swap protection, and a built-in cross-platform TUI editor.
+
+See [TODO.md](TODO.md) for the full technical backlog.
 
 ---
 
