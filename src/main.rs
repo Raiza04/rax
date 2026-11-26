@@ -7,15 +7,17 @@
 use clap::{Parser, Subcommand};
 use rpassword::prompt_password;
 use std::io::Result;
+use std::path::PathBuf;
 use zeroize::Zeroize;
 
 mod builtin;
 mod crypto;
 mod fs;
 mod shell;
+mod ui;
 mod vault;
 
-use vault::{Vault, get_vault_path};
+use vault::{Vault, get_vault_path, import_vault};
 
 /// Command-line interface for the host OS.
 ///
@@ -46,6 +48,19 @@ enum Commands {
         /// Securely deletes the original file after successful import.
         #[arg(short, long)]
         remove: bool,
+    },
+
+    /// Makes the vault file larger by allocating additional space.
+    Grow { size: usize },
+
+    Import {
+        path: PathBuf,
+
+        #[arg(long, conflicts_with = "backup")]
+        force: bool,
+
+        #[arg(long, conflicts_with = "force")]
+        backup: bool,
     },
 }
 
@@ -86,50 +101,75 @@ fn run_app() -> Result<()> {
         Some(Commands::Create { size }) => {
             let mut admin_pass = setup_admin()?;
             let vault_path = get_vault_path()?;
-            println!(
+            ui::info(&format!(
                 "Creating vault at '{}' with a size of {} MB...",
                 vault_path.display(),
                 size
-            );
+            ));
 
             let res = Vault::create(&vault_path, *size, &admin_pass);
             admin_pass.zeroize();
             res?;
+            ui::success("Vault successfully created");
         }
 
         Some(Commands::Put { path, remove }) => {
-            let mut pass_auth = prompt_password("Enter the admin password: ")?;
-            let vault_path = get_vault_path()?;
-            let vault = Vault::open(&vault_path, &pass_auth);
-            pass_auth.zeroize();
-            let mut vault = vault?;
+            let mut vault = check_login()?;
+            ui::info(&format!("Importing file '{}' into vault...", path));
 
             vault.put_file(path, remove)?;
             vault.sync()?;
 
-            println!("File successfully encrypted and stored in vault.");
+            ui::success("File successfully encrypted and stored in vault.");
         }
+        Some(Commands::Grow { size }) => {
+            let mut vault = check_login()?;
 
+            ui::info(&format!("Growing vault by {} MB...", size));
+            vault.grow(*size)?;
+
+            ui::success("Vault successfully extended");
+        }
+        Some(Commands::Import {
+            path,
+            force,
+            backup,
+        }) => {
+            ui::info(&format!("Importing vault from '{}'...", path.display()));
+            let target = get_vault_path()?;
+            import_vault(path, &target, *force, *backup)?;
+            ui::success(&format!(
+                "Vault successfully imported to '{}'",
+                target.display()
+            ));
+        }
         None => {
-            let mut pass_auth = prompt_password("Enter the admin password: ")?;
-            let vault_path = get_vault_path()?;
-            let opened_vault = Vault::open(&vault_path, &pass_auth);
-            pass_auth.zeroize();
-            let mut opened_vault = opened_vault?;
-
-            shell::run_shell(&mut opened_vault)?;
+            let mut vault = check_login()?;
+            ui::info("Entering interactive shell. Type 'help' for commands, or 'exit' to quit.");
+            shell::run_shell(&mut vault)?;
         }
     }
 
     Ok(())
 }
+
+fn check_login() -> Result<Vault> {
+    let vault_path = get_vault_path()?;
+    let mut pass_auth = prompt_password("Enter the admin password: ")?;
+    let vault = Vault::open(&vault_path, &pass_auth);
+    pass_auth.zeroize();
+    let res_vault = vault?;
+
+    Ok(res_vault)
+}
+
 /// The main entry point.
 ///
 /// Wraps `run_app()` to provide a clean exit with an error code and a formatted
 /// error message if a critical failure bubbles all the way up from the backend.
 fn main() {
     if let Err(e) = run_app() {
-        eprintln!("Error: {} ", e);
+        ui::error(&e.to_string());
         std::process::exit(1);
     }
 }

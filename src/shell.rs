@@ -4,8 +4,9 @@
 //! Bash-style tab completion, live syntax highlighting, and inline parameter hints.
 
 use std::borrow::Cow::{self, Borrowed, Owned};
-use std::io::Result;
+use std::io::{Error, Result};
 
+use clap::error::ErrorKind as ClapErrorKind;
 use clap::{Parser, Subcommand};
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
 use rustyline::error::ReadlineError;
@@ -16,6 +17,7 @@ use rustyline::validate::Validator;
 use rustyline::{CompletionType, Config, Context, Editor, Helper};
 
 use crate::fs::Inode;
+use crate::ui;
 use crate::vault::Vault;
 
 /// Autocompletion, syntax highlighting, and inline hinting helper for the `rax` REPL.
@@ -37,7 +39,9 @@ impl RaxHelper {
         Self {
             vault_files: files.iter().map(|f| f.name.clone()).collect(),
             host_completer: FilenameCompleter::new(),
-            commands: vec!["ls", "put", "get", "rm", "cat", "edit", "clear", "exit"],
+            commands: vec![
+                "help", "ls", "put", "get", "rm", "cat", "edit", "clear", "exit", "grow",
+            ],
         }
     }
 
@@ -56,14 +60,14 @@ impl RaxHelper {
     fn colorize_token(&self, token: &str, index: usize) -> String {
         if index == 0 {
             if self.commands.contains(&token) {
-                format!("\x1b[1;32m{}\x1b[0m", token)
+                ui::green(token)
             } else {
-                format!("\x1b[1;31m{}\x1b[0m", token)
+                ui::red(token)
             }
         } else if token.starts_with('-') {
-            format!("\x1b[36m{}\x1b[0m", token)
+            ui::cyan(token)
         } else if self.vault_files.iter().any(|f| f == token) {
-            format!("\x1b[1;33m{}\x1b[0m", token)
+            ui::yellow(token)
         } else {
             token.to_string()
         }
@@ -213,6 +217,7 @@ impl Hinter for RaxHelper {
                 "put" => Some("<host_path> [--remove]".to_string()),
                 "get" => Some("--file <vault_file> --dest <host_path>".to_string()),
                 "cat" | "edit" | "rm" => Some("<vault_file>".to_string()),
+                "grow" => Some("<size_in_MB>".to_string()),
                 _ => None,
             };
         }
@@ -347,22 +352,25 @@ enum ReplCommands {
         file: String,
     },
 
+    /// Makes the vault file larger by allocating additional space.
+    Grow {
+        /// The additional size in megabytes to allocate to the vault.
+        size: usize,
+    },
+
     /// Clears the terminal screen.
     Clear,
 }
 
 /// Starts the interactive shell session, blocking the main thread until the user exits.
 pub fn run_shell(vault: &mut Vault) -> Result<()> {
-    print!("\x1b[1A\x1b[2K\r\x1b[32mWelcome to the rax shell. Type 'exit' to quit.\x1b[0m\n");
-
     // Configure Bash-style list completion and prompt threshold
     let config = Config::builder()
         .completion_type(CompletionType::List)
         .completion_prompt_limit(20)
         .build();
 
-    let mut rl =
-        Editor::<RaxHelper, DefaultHistory>::with_config(config).map_err(std::io::Error::other)?;
+    let mut rl = Editor::<RaxHelper, DefaultHistory>::with_config(config).map_err(Error::other)?;
     let helper = RaxHelper::new(&vault.table.files);
     rl.set_helper(Some(helper));
 
@@ -382,7 +390,7 @@ pub fn run_shell(vault: &mut Vault) -> Result<()> {
                 let _ = rl.add_history_entry(input);
 
                 if input == "exit" {
-                    println!("Locking vault...");
+                    ui::info("Locking vault...");
                     vault.sync()?;
                     break;
                 }
@@ -398,54 +406,79 @@ pub fn run_shell(vault: &mut Vault) -> Result<()> {
                         Some(ReplCommands::Put { path, remove }) => {
                             match vault.put_file(&path, &remove).and_then(|_| vault.sync()) {
                                 Ok(_) => {
-                                    println!("File successfully encrypted and stored in vault.")
+                                    ui::success("File successfully encrypted and stored in vault.")
                                 }
-                                Err(e) => println!("Error importing file: {}", e),
+                                Err(e) => ui::error(&format!("importing file failed: {}", e)),
                             }
                         }
                         Some(ReplCommands::Get { file, dest }) => {
                             match vault.get_file(&file, &dest) {
-                                Ok(_) => println!("'{}' successfully extracted.", file),
-                                Err(e) => println!("Error extracting file: {}", e),
+                                Ok(_) => {
+                                    ui::success(&format!("'{}' successfully extracted.", file))
+                                }
+                                Err(e) => ui::error(&format!("extracting file failed: {}", e)),
                             }
                         }
                         Some(ReplCommands::Rm { file }) => {
                             match crate::builtin::rm(vault, &file).and_then(|_| vault.sync()) {
-                                Ok(_) => {
-                                    println!("File '{}' permanently removed from vault.", file)
-                                }
-                                Err(e) => println!("Error removing file: {}", e),
+                                Ok(_) => ui::success(&format!(
+                                    "File '{}' permanently removed from vault.",
+                                    file
+                                )),
+                                Err(e) => ui::error(&format!("failed to remove file: {}", e)),
                             }
                         }
-                        Some(ReplCommands::Cat { file }) => {
-                            if let Err(e) = crate::builtin::cat(vault, &file) {
-                                println!("Error reading file: {}", e);
-                            }
-                        }
+                        Some(ReplCommands::Cat { file }) => match crate::builtin::cat(vault, &file)
+                        {
+                            Ok(_) => {}
+                            Err(e) => ui::error(&format!("reading file failed: {}", e)),
+                        },
                         Some(ReplCommands::Edit { file }) => {
-                            if let Err(e) = crate::builtin::edit(vault, &file) {
-                                println!("Error editing file: {}", e);
+                            match crate::builtin::edit(vault, &file) {
+                                Ok(_) => {
+                                    ui::success(&format!("File '{}' successfully edited.", file))
+                                }
+                                Err(e) => ui::error(&format!("editing file failed: {}", e)),
                             }
                         }
+                        Some(ReplCommands::Grow { size }) => match vault.grow(size) {
+                            Ok(_) => {
+                                ui::success(&format!("Vault successfully grown by {} MB.", size))
+                            }
+                            Err(e) => ui::error(&format!("growing vault failed: {}", e)),
+                        },
                         Some(ReplCommands::Clear) => {
                             let _ = rl.clear_screen();
                         }
                         None => {
-                            println!("Command not found");
+                            ui::warn("Command not found");
                         }
                     },
-                    Err(e) => {
-                        println!("{}", e);
-                    }
+                    Err(e) => match e.kind() {
+                        ClapErrorKind::DisplayHelp | ClapErrorKind::DisplayVersion => {
+                            print!("{}", e);
+                        }
+                        ClapErrorKind::InvalidSubcommand => {
+                            let cmd = input.split_whitespace().next().unwrap_or(input);
+                            ui::warn(&format!(
+                                "Command '{}' not found. Type 'help' to see available commands.",
+                                ui::red(cmd)
+                            ));
+                        }
+                        _ => {
+                            // Fehlende Flags/Argumente (clap bringt schon "error:" mit)
+                            eprint!("{}", e);
+                        }
+                    },
                 }
             }
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
-                println!("Locking vault...");
+                ui::info("Locking vault...");
                 vault.sync()?;
                 break;
             }
             Err(err) => {
-                println!("Error reading line: {}", err);
+                ui::error(&format!("Could not read the line: {}", err));
                 break;
             }
         }

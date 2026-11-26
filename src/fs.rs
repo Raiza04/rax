@@ -67,6 +67,37 @@ impl InodeTable {
         }
     }
 
+    /// Expands the inode table's block allocation bitmap by the given number of megabytes.
+    ///
+    /// Appends `additional_mb * 256` newly available (`false`) block entries to
+    /// `self.free_blocks`, where each block represents 4096 bytes.
+    ///
+    /// # Arguments
+    /// * `additional_mb` - Number of megabytes to add to the virtual container capacity.
+    ///
+    /// # Panics
+    /// Panics if the resulting block count overflows `usize`. Callers should validate
+    /// capacity limits before invoking this method.
+    ///
+    /// # Examples
+    /// ```ignore
+    /// let mut table = InodeTable::new(2);
+    /// table.grow(1); // Adds 1 MB (256 blocks) to the free space
+    /// assert_eq!(table.free_blocks.len(), 768); // 512 original + 256 new
+    /// ```
+    pub fn grow(&mut self, additional_mb: usize) {
+        let additional_blocks = additional_mb
+            .checked_mul(256)
+            .expect("block count overflow while growing inode table");
+        let new_len = self
+            .free_blocks
+            .len()
+            .checked_add(additional_blocks)
+            .expect("inode table length overflow");
+
+        self.free_blocks.resize(new_len, false);
+    }
+
     /// Finds and reserves the requested number of free blocks in the vault.
     ///
     /// Scans the `free_blocks` bitmap for available space and marks it as allocated
@@ -225,5 +256,17 @@ mod tests {
 
         assert_eq!(original.free_blocks, restored.free_blocks);
         assert_eq!(original.block_size, restored.block_size);
+    }
+
+    /// verifies that the `grow` method correctly expands the free block bitmap and maintains
+    /// reserved blocks.
+    #[test]
+    fn test_inode_table_grow() {
+        let mut original = InodeTable::new(3);
+        original.grow(2);
+
+        assert_eq!(original.free_blocks.len(), 5 * 256); // 3MB + 2MB = 5MB total, each MB = 256 blocks
+        assert!(original.free_blocks[0..256].iter().all(|&b| b)); // First 1MB reserved
+        assert!(original.free_blocks[256..].iter().all(|&b| !b)); // Remaining blocks should be free
     }
 }
