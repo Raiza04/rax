@@ -4,6 +4,7 @@
 //! and the low-level virtual file system operations. It handles output formatting
 //! (like tables for `ls`) and safety guarantees (like UTF-8 validation for `cat`).
 
+use crate::ui;
 use crate::vault::Vault;
 use chrono::{DateTime, Local};
 use std::env;
@@ -24,7 +25,7 @@ use zeroize::Zeroize;
 /// * `detail` - If true, additional metadata (like timestamps) will be displayed for each file.
 pub fn ls(vault: &Vault, detail: bool) {
     if vault.table.files.is_empty() {
-        println!("(Vault is empty)");
+        ui::info("(Vault is empty)");
         return;
     }
 
@@ -204,9 +205,8 @@ pub fn edit(vault: &mut Vault, filename: &str) -> Result<()> {
             }
 
             vault.sync()?;
-            println!("File '{}' successfully updated.", filename);
         } else {
-            println!("Editor closed with an error. No changes were saved.");
+            ui::error("Editor closed with an error. No changes were saved.");
         }
         Ok(())
     })();
