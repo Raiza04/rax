@@ -36,7 +36,7 @@ Unlike traditional disk encryption tools that mount an entire filesystem into th
 ## ✨ Key Features
 
 ### 🔒 Security
-* **Authenticated Block Cryptography:** Uses **AES-256-GCM** mapped to a fixed `4096`-byte physical block grid (`12`-byte CSPRNG Nonce + `4068`-byte payload + `16`-byte Poly1305 MAC tag). Every block is cryptographically authenticated to detect bit-rot or tampering immediately.
+* **Authenticated Block Cryptography:** Uses **AES-256-GCM** mapped to a fixed `4096`-byte physical block grid (`12`-byte CSPRNG Nonce + `4068`-byte payload + `16`-byte GCM MAC tag). Every block is cryptographically authenticated to detect bit-rot or tampering immediately.
 * **Memory-Hard Key Derivation:** Master keys are derived on the fly via **Argon2id** paired with a 32-byte per-vault cryptographic salt, defending against GPU-accelerated brute-force attacks.
 * **Volatile RAM Wiping (`zeroize`):** All plaintext file buffers, derived key slices, and password strings are explicitly overwritten with zeros in RAM using volatile memory operations before going out of scope.
 * **Zero-SSD-Trace Editing (`/dev/shm`):** When editing a file via `edit`, `rax` extracts the decrypted stream exclusively into Linux Shared Memory (`/dev/shm` RAM disk), launches your `$VISUAL` / `$EDITOR` (or `nano`), re-encrypts the updated file on exit, and zeros out the volatile buffer—never touching physical NAND flash.
@@ -58,7 +58,7 @@ Unlike traditional disk encryption tools that mount an entire filesystem into th
 | **Root / `sudo` Privileges** | **Not required** (runs in user-space) | **Required** to mount virtual block devices |
 | **OS Indexing & Telemetry** | **Immune** (OS cannot see inside the open vault) | **Exposed** (Spotlight, Windows Search, & thumbs index mounted drives) |
 | **SSD Wear-Leveling Leaks** | **Prevented** (`cat` and `edit` stay strictly in RAM) | **Risk via Temp Files** (editors often write `.swp` files to host disk) |
-| **Explicit RAM Zeroization** | **Enforced** after every single command | Keys stay mounted in kernel memory until dismount |
+| **Explicit RAM Zeroization** | Plaintext buffers **zeroized** after every command; keys wiped on exit | Keys stay mounted in kernel memory until dismount |
 | **Workflow** | Instant CLI commands & smart `rax>` shell | Heavy GUI or multi-step loop-device mounting |
 
 ---
