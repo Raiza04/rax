@@ -53,6 +53,7 @@ enum Commands {
     /// Makes the vault file larger by allocating additional space.
     Grow { size: usize },
 
+    /// imports an existing vault file from a specified path into the default vault location.
     Import {
         path: PathBuf,
 

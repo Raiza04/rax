@@ -21,6 +21,8 @@
 [Limitations](#limitations) •
 [API Docs](https://Raiza04.github.io/rax/)
 
+![rax Demo](assets/demo.gif)
+
 </div>
 
 ---
@@ -111,35 +113,6 @@ rax put ~/Documents/recovery_codes.txt --remove
 
 # Launch the interactive rax shell
 rax
-```
-
-### 2. Interactive Shell (`rax>`)
-Once authenticated, `rax` drops you into an isolated shell with command history, context-aware tab completion, live syntax highlighting, and inline parameter hints:
-
-```text
-Info: Entering interactive shell. Type 'help' for commands, or 'exit' to quit.
-rax> ls -d
-Name                           | Size       | Created
--------------------------------+------------+---------------------
-recovery_codes.txt             | 1.24 KB    | 2026-11-26 18:10:42
--------------------------------+------------+---------------------
-Vault capacity: 1.00 MB / 75.00 MB used [1.34%]
-
-rax> cat recovery_codes.txt
-1. 8f9a-22b1-90c4
-2. 7d1e-44a9-11b2
-
-rax> edit recovery_codes.txt
-✔ File 'recovery_codes.txt' successfully edited.
-
-rax> get --file recovery_codes.txt --dest /tmp/exported_codes.txt
-✔ 'recovery_codes.txt' successfully extracted.
-
-rax> rm recovery_codes.txt
-✔ File 'recovery_codes.txt' permanently removed from vault.
-
-rax> exit
-Info: Locking vault...
 ```
 
 <details>
