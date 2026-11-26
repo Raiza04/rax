@@ -14,6 +14,7 @@ mod builtin;
 mod crypto;
 mod fs;
 mod shell;
+mod ui;
 mod vault;
 
 use vault::{Vault, get_vault_path, import_vault};
@@ -100,43 +101,51 @@ fn run_app() -> Result<()> {
         Some(Commands::Create { size }) => {
             let mut admin_pass = setup_admin()?;
             let vault_path = get_vault_path()?;
-            println!(
+            ui::info(&format!(
                 "Creating vault at '{}' with a size of {} MB...",
                 vault_path.display(),
                 size
-            );
+            ));
 
             let res = Vault::create(&vault_path, *size, &admin_pass);
             admin_pass.zeroize();
             res?;
+            ui::success("Vault successfully created");
         }
 
         Some(Commands::Put { path, remove }) => {
             let mut vault = check_login()?;
+            ui::info(&format!("Importing file '{}' into vault...", path));
 
             vault.put_file(path, remove)?;
             vault.sync()?;
 
-            println!("File successfully encrypted and stored in vault.");
+            ui::success("File successfully encrypted and stored in vault.");
         }
         Some(Commands::Grow { size }) => {
             let mut vault = check_login()?;
 
+            ui::info(&format!("Growing vault by {} MB...", size));
             vault.grow(*size)?;
 
-            println!("Vault successfully grown by {} MB.", size);
+            ui::info("Vault successfully extended");
         }
         Some(Commands::Import {
             path,
             force,
             backup,
         }) => {
+            ui::info(&format!("Importing vault from '{}'...", path.display()));
             let target = get_vault_path()?;
             import_vault(path, &target, *force, *backup)?;
+            ui::success(&format!(
+                "Vault successfully imported to '{}'",
+                target.display()
+            ));
         }
         None => {
             let mut vault = check_login()?;
-
+            ui::info("Entering interactive shell. Type 'help' for commands, or 'exit' to quit.");
             shell::run_shell(&mut vault)?;
         }
     }
@@ -160,7 +169,7 @@ fn check_login() -> Result<Vault> {
 /// error message if a critical failure bubbles all the way up from the backend.
 fn main() {
     if let Err(e) = run_app() {
-        eprintln!("Error: {} ", e);
+        ui::error(&e.to_string());
         std::process::exit(1);
     }
 }

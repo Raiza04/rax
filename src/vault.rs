@@ -3,14 +3,13 @@
 //! This module handles the physical file I/O, cryptographic boundaries,
 //! block allocations, and persistent state management of the vault.
 
+use crate::ui;
 use directories::ProjectDirs;
 use rand::RngExt;
 use std::fs::{self, File};
 use std::io::{Error, ErrorKind, Read, Result, Seek, SeekFrom, Write};
-use std::path::Path;
-use std::path::PathBuf;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use std::path::{Path, PathBuf};
+use std::time::{SystemTime, UNIX_EPOCH};
 use zeroize::Zeroize;
 
 /// Represents an open, authenticated session with the encrypted vault.
@@ -63,11 +62,14 @@ impl Vault {
         let mut rng = rand::rng();
         let mut buffer = vec![0u8; 1024 * 1024];
 
+        let pb = ui::create_progress_bar((size_mb as u64) * 1024 * 1024, "Creating vault");
+
         for _ in 0..size_mb {
             rng.fill(&mut buffer[..]);
             file.write_all(&buffer)?;
+            pb.inc(1024 * 1024);
         }
-
+        pb.finish_and_clear();
         // 2. Rewind the file pointer to the beginning to write the header
         file.seek(SeekFrom::Start(0))?;
 
@@ -218,14 +220,19 @@ impl Vault {
         let mut rng = rand::rng();
         let mut buffer = vec![0u8; 1024 * 1024];
 
+        let pb = ui::create_progress_bar((additional_mb as u64) * 1024 * 1024, "Growing vault");
+
         for _ in 0..additional_mb {
             rng.fill(&mut buffer[..]);
             if let Err(e) = self.file.write_all(&buffer) {
+                pb.finish_and_clear();
                 let _ = self.file.set_len(original_len);
                 let _ = self.file.sync_all();
                 return Err(e);
             }
+            pb.inc(1024 * 1024);
         }
+        pb.finish_and_clear();
         self.file.sync_all()?;
 
         // Commit metadata change and roll back both RAM and disk if syncing fails
@@ -331,7 +338,9 @@ impl Vault {
             .allocate(blocks_needed)
             .ok_or_else(|| Error::other("Not enough space in vault!!"))?;
 
+        let pb = ui::create_progress_bar(file_size as u64, &format!("Encrypting '{}'", filename));
         let mut buffer = [0u8; 4068];
+
         for block_index in allocated_blocks.iter() {
             let bytes_read = source_file.read(&mut buffer)?;
             if bytes_read == 0 {
@@ -343,7 +352,9 @@ impl Vault {
 
             let payload = crate::crypto::encrypt_block_payload(&self.cipher, &buffer)?;
             self.write_block(*block_index, &payload)?;
+            pb.inc(bytes_read as u64);
         }
+        pb.finish_and_clear();
         buffer.zeroize();
 
         let path = std::path::Path::new(source_path);
@@ -401,6 +412,7 @@ impl Vault {
 
         let mut out_file = std::fs::File::create(dest_path)?;
         let mut bytes_left = inode.size_bytes as usize;
+        let pb = ui::create_progress_bar(inode.size_bytes, &format!("Decrypting '{}'", filename));
 
         for &block_index in &inode.blocks {
             let encrypted_block = self.read_block(block_index)?;
@@ -412,7 +424,9 @@ impl Vault {
 
             payload.zeroize();
             bytes_left -= write_len;
+            pb.inc(write_len as u64);
         }
+        pb.finish_and_clear();
 
         Ok(())
     }
